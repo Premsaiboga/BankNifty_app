@@ -1,0 +1,16 @@
+symbol: BANKNIFTY
+
+timeframe_entry: "5m"
+timeframe_bias: "15m"
+
+trade_start: "09:30"
+trade_end: "14:45"
+
+max_trades_per_day: 3
+
+risk_reward:
+  - 2
+  - 3
+  - 4
+
+ml_probability_threshold: 0.65
