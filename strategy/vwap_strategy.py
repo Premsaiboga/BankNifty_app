@@ -1,107 +1,100 @@
 import pandas as pd
-import numpy as np
 
 
 class VWAPPullbackStrategy:
     def __init__(self, max_trades_per_day=3, rr_list=[2, 3, 4]):
         self.max_trades_per_day = max_trades_per_day
         self.rr_list = rr_list
-        self.trade_count = 0
 
+    # ===============================
+    # DAILY VWAP (MANDATORY)
+    # ===============================
     @staticmethod
     def calculate_vwap(df: pd.DataFrame) -> pd.Series:
         """
-        Calculate session VWAP
+        VWAP PROXY for INDEX (no real volume available)
+        Uses cumulative mean of Typical Price per session
         """
-        tp = (df["high"] + df["low"] + df["close"]) / 3
-        vwap = (tp * df["volume"]).cumsum() / df["volume"].cumsum()
+        df = df.copy()
+        df["date"] = pd.to_datetime(df["datetime"]).dt.date
+
+        vwap = pd.Series(index=df.index, dtype="float64")
+
+        for date, idx in df.groupby("date").groups.items():
+            day_df = df.loc[idx]
+
+            typical_price = (
+                day_df["high"] + day_df["low"] + day_df["close"]
+            ) / 3
+
+            session_vwap = typical_price.expanding().mean()
+            vwap.loc[idx] = session_vwap
+
         return vwap
 
     @staticmethod
-    def is_bullish(candle):
-        return candle["close"] > candle["open"]
+    def is_bullish(c):
+        return c["close"] > c["open"]
 
     @staticmethod
-    def is_bearish(candle):
-        return candle["close"] < candle["open"]
+    def is_bearish(c):
+        return c["close"] < c["open"]
 
+    # ===============================
+    # CORE STRATEGY LOGIC (DEBUG MODE)
+    # ===============================
     def generate_signals(self, df: pd.DataFrame):
-        """
-        Main strategy logic.
-        Returns a list of trade signal dictionaries.
-        """
-
         df = df.copy()
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df["date"] = df["datetime"].dt.date
         df["vwap"] = self.calculate_vwap(df)
 
+        # Debug preview
+        # print(df[["datetime", "close", "vwap"]].head(10))
+        # print(df[["datetime", "close", "vwap"]].tail(10))
+
         signals = []
+        trades_per_day = {}
+
+        debug = {
+            "total_candles": 0,
+            "vwap_side_ok": 0,
+            "vwap_proximity_ok": 0,
+            "candle_ok": 0
+        }
 
         for i in range(1, len(df)):
-
-            if self.trade_count >= self.max_trades_per_day:
-                break
-
-            prev = df.iloc[i - 1]
             curr = df.iloc[i]
+            day = curr["date"]
 
-            # Ignore tiny candles (doji / low conviction)
-            candle_body = abs(curr["close"] - curr["open"])
-            candle_range = curr["high"] - curr["low"]
+            trades_per_day.setdefault(day, 0)
 
-            if candle_range == 0 or candle_body / candle_range < 0.3:
+            if trades_per_day[day] >= self.max_trades_per_day:
                 continue
 
-            # ================= BUY SETUP =================
-            if (
-                curr["close"] > curr["vwap"] and
-                prev["low"] <= prev["vwap"] and
-                self.is_bullish(curr)
-            ):
-                entry = curr["high"]
+            debug["total_candles"] += 1
+
+            # VERY BASIC DEBUG CONDITION
+            if curr["close"] > curr["vwap"]:
+                debug["vwap_side_ok"] += 1
+
+                entry = curr["close"]
                 sl = curr["low"]
 
                 if entry <= sl:
                     continue
 
-                for rr in self.rr_list:
-                    target = entry + (entry - sl) * rr
+                target = entry + (entry - sl) * 2
 
-                    signals.append({
-                        "type": "BUY",
-                        "entry": round(entry, 2),
-                        "stoploss": round(sl, 2),
-                        "target": round(target, 2),
-                        "rr": rr,
-                        "time": curr["datetime"]
-                    })
+                signals.append({
+                    "type": "BUY",
+                    "entry": round(entry, 2),
+                    "stoploss": round(sl, 2),
+                    "target": round(target, 2),
+                    "rr": 2,
+                    "time": curr["datetime"]
+                })
 
-                self.trade_count += 1
-                continue
-
-            # ================= SELL SETUP =================
-            if (
-                curr["close"] < curr["vwap"] and
-                prev["high"] >= prev["vwap"] and
-                self.is_bearish(curr)
-            ):
-                entry = curr["low"]
-                sl = curr["high"]
-
-                if sl <= entry:
-                    continue
-
-                for rr in self.rr_list:
-                    target = entry - (sl - entry) * rr
-
-                    signals.append({
-                        "type": "SELL",
-                        "entry": round(entry, 2),
-                        "stoploss": round(sl, 2),
-                        "target": round(target, 2),
-                        "rr": rr,
-                        "time": curr["datetime"]
-                    })
-
-                self.trade_count += 1
+                trades_per_day[day] += 1
 
         return signals

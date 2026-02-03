@@ -48,9 +48,13 @@ class BacktestEngine:
         df["datetime"] = pd.to_datetime(df["datetime"])
 
         strategy = VWAPPullbackStrategy(max_trades_per_day=3)
+        df["vwap"] = strategy.calculate_vwap(df)
         df["atr"] = self.calculate_atr(df)
 
         signals = strategy.generate_signals(df)
+        if not signals:
+            print("No trade signals generated. Check strategy conditions.")
+            return
         trade_logs = []
 
         for trade in signals:
