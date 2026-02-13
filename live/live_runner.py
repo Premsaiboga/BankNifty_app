@@ -1,0 +1,182 @@
+import time
+import pandas as pd
+from datetime import datetime
+from collections import deque
+from kiteconnect import KiteTicker
+from dotenv import load_dotenv
+import os
+
+from strategy.abcd_strategy import ABCDStrategy
+from strategy.pivot_strategy import PivotStrategy
+from strategy.vwap_strategy import VWAPPullbackStrategy
+from live.live_engine import process_trade
+
+# =========================
+# LOAD ENV
+# =========================
+load_dotenv()
+API_KEY = os.getenv("API_KEY")
+ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
+
+instrument_token = 260105  # BANKNIFTY
+
+# =========================
+# GLOBAL STATE
+# =========================
+ticks_buffer = []
+current_minute = None
+minute_candles = []
+five_min_candles = []
+last_trade_keys = set()
+
+# =========================
+# WEBSOCKET HANDLERS
+# =========================
+def on_ticks(ws, ticks):
+    global ticks_buffer
+    ticks_buffer.extend(ticks)
+
+def on_connect(ws, response):
+    ws.subscribe([instrument_token])
+    ws.set_mode(ws.MODE_FULL, [instrument_token])
+    print("✅ Connected to Zerodha WebSocket")
+
+def on_close(ws, code, reason):
+    print("❌ WebSocket closed:", reason)
+
+# =========================
+# CANDLE BUILDERS
+# =========================
+def build_1min_candle(ticks):
+    if not ticks:
+        return None
+    df = pd.DataFrame(ticks)
+    return {
+        "datetime": df["exchange_timestamp"].iloc[0].replace(second=0, microsecond=0),
+        "open": float(df["last_price"].iloc[0]),
+        "high": float(df["last_price"].max()),
+        "low": float(df["last_price"].min()),
+        "close": float(df["last_price"].iloc[-1]),
+    }
+
+def aggregate_5min():
+    if len(minute_candles) < 5:
+        return None
+    last5 = minute_candles[-5:]
+    return {
+        "datetime": last5[-1]["datetime"],
+        "open": last5[0]["open"],
+        "high": max(c["high"] for c in last5),
+        "low": min(c["low"] for c in last5),
+        "close": last5[-1]["close"],
+    }
+
+# =========================
+# INDICATORS
+# =========================
+def calculate_atr(df, period=14):
+    if len(df) < period + 1:
+        return None
+    trs = []
+    for i in range(1, period + 1):
+        curr = df.iloc[-i]
+        prev = df.iloc[-i - 1]
+        tr = max(
+            curr["high"] - curr["low"],
+            abs(curr["high"] - prev["close"]),
+            abs(curr["low"] - prev["close"]),
+        )
+        trs.append(tr)
+    return sum(trs) / period
+
+def calculate_vwap(df):
+    typical = (df["high"] + df["low"] + df["close"]) / 3
+    return typical.expanding().mean()
+
+def calculate_daily_pivots(df):
+    df["date"] = df["datetime"].dt.date
+    last_day = df["date"].iloc[-1]
+    prev_day_df = df[df["date"] < last_day]
+    if prev_day_df.empty:
+        return None, None, None
+    prev_high = prev_day_df["high"].max()
+    prev_low = prev_day_df["low"].min()
+    prev_close = prev_day_df["close"].iloc[-1]
+    pivot = (prev_high + prev_low + prev_close) / 3
+    r1 = 2 * pivot - prev_low
+    s1 = 2 * pivot - prev_high
+    return pivot, r1, s1
+
+# =========================
+# MAIN LOOP
+# =========================
+def candle_watcher():
+    global ticks_buffer, current_minute
+
+    abcd = ABCDStrategy()
+    pivot_strategy = PivotStrategy()
+    vwap_strategy = VWAPPullbackStrategy()
+
+    while True:
+        now = datetime.now().replace(second=0, microsecond=0)
+
+        if current_minute is None:
+            current_minute = now
+
+        if now > current_minute:
+            candle = build_1min_candle(ticks_buffer)
+
+            if candle:
+                minute_candles.append(candle)
+
+                if len(minute_candles) % 5 == 0:
+                    five = aggregate_5min()
+                    if five:
+                        five_min_candles.append(five)
+
+                        df = pd.DataFrame(five_min_candles)
+                        df["datetime"] = pd.to_datetime(df["datetime"])
+
+                        df["vwap"] = calculate_vwap(df)
+                        df["atr"] = calculate_atr(df)
+
+                        pivot, r1, s1 = calculate_daily_pivots(df)
+                        if pivot:
+                            df["pivot"] = pivot
+                            df["r1"] = r1
+                            df["s1"] = s1
+
+                        latest_time = df.iloc[-1]["datetime"]
+
+                        trades = []
+                        trades += abcd.generate_trades(df)
+                        trades += pivot_strategy.generate_trades(df)
+                        trades += vwap_strategy.generate_signals(df)
+
+                        for trade in trades:
+                            key = f"{trade['strategy']}_{latest_time}"
+                            if key in last_trade_keys:
+                                continue
+                            last_trade_keys.add(key)
+                            process_trade(trade)
+
+            ticks_buffer = []
+            current_minute = now
+
+        time.sleep(1)
+
+# =========================
+# START
+# =========================
+kws = KiteTicker(API_KEY, ACCESS_TOKEN)
+kws.on_ticks = on_ticks
+kws.on_connect = on_connect
+kws.on_close = on_close
+
+kws.connect(threaded=True)
+
+import threading
+threading.Thread(target=candle_watcher, daemon=True).start()
+
+while True:
+    time.sleep(1)
