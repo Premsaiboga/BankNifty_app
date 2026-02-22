@@ -1,7 +1,7 @@
 STRATEGY_THRESHOLDS = {
-    "PIVOT": 0.65,          # stricter
-    "VWAP_PULLBACK": 0.60,
-    "ABCD": 0.65
+    "PIVOT": 0.52,          # stricter
+    "VWAP_PULLBACK": 0.50,
+    "ABCD": 0.55
 }
 
 RR = 4
