@@ -38,8 +38,16 @@ def ai_filter(trade, df, bias, regime):
     # RR still important
     features["rr"] = trade.get("rr", 4)
 
-    # dataframe alignment
-    X_df = pd.DataFrame([features])[FEATURES]
+     # build dataframe
+    X_df = pd.DataFrame([features])
+
+    # ensure all trained columns exist
+    for col in FEATURES:
+        if col not in X_df.columns:
+            X_df[col] = 0
+
+    # reorder exactly like training
+    X_df = X_df[FEATURES]
 
     # -------------------------
     # Scale + Predict

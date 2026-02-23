@@ -7,6 +7,10 @@ from strategy.abcd_strategy import ABCDStrategy
 from brain.market_brain import detect_bias, detect_regime
 from brain.strategy_brain import allow_trade
 from brain.risk_brain import adjust_targets, reversal_warning
+from brain.liquidity_engine import liquidity_block
+
+# ===== LIVE EXIT MANAGER =====
+from brain.live_exit_manager import register_trade, update_live_exits
 
 # ===== AI FILTER =====
 from ml.ai_filter import ai_filter
@@ -43,7 +47,7 @@ five_min_candles = []
 last_trade_keys = set()
 
 # =========================
-# WS
+# WEBSOCKET
 # =========================
 def on_ticks(ws, ticks):
     global ticks_buffer
@@ -58,7 +62,7 @@ def on_close(ws, code, reason):
     print("❌ Closed:", reason)
 
 # =========================
-# CANDLES
+# CANDLE BUILDERS
 # =========================
 def build_1min_candle(ticks):
     if not ticks:
@@ -92,25 +96,31 @@ def aggregate_5min():
 def calculate_atr(df, period=14):
     if len(df) < period + 1:
         return None
+
     trs = []
     for i in range(1, period + 1):
         curr = df.iloc[-i]
         prev = df.iloc[-i - 1]
+
         tr = max(
             curr["high"] - curr["low"],
             abs(curr["high"] - prev["close"]),
             abs(curr["low"] - prev["close"]),
         )
         trs.append(tr)
+
     return sum(trs) / period
+
 
 def calculate_vwap(df):
     typical = (df["high"] + df["low"] + df["close"]) / 3
     return typical.expanding().mean()
 
+
 def calculate_daily_pivots(df):
     df["date"] = df["datetime"].dt.date
     last_day = df["date"].iloc[-1]
+
     prev = df[df["date"] < last_day]
     if prev.empty:
         return None, None, None
@@ -126,7 +136,7 @@ def calculate_daily_pivots(df):
     return pivot, r1, s1
 
 # =========================
-# ENGINE
+# MAIN ENGINE
 # =========================
 def candle_watcher():
     global ticks_buffer, current_minute
@@ -144,7 +154,7 @@ def candle_watcher():
         latest_tick = ticks_buffer[-1]["exchange_timestamp"]
         latest_tick = latest_tick.replace(tzinfo=pytz.utc).astimezone(IST)
 
-        if not (dt_time(9,15) <= latest_tick.time() <= dt_time(15,30)):
+        if not (dt_time(9, 15) <= latest_tick.time() <= dt_time(15, 30)):
             time.sleep(1)
             continue
 
@@ -176,6 +186,9 @@ def candle_watcher():
                     df["r1"] = r1 or 0
                     df["s1"] = s1 or 0
 
+                    # ===== UPDATE LIVE TRADES =====
+                    update_live_exits(df)
+
                     # ===== MARKET BRAIN =====
                     bias, _ = detect_bias(df)
                     regime = detect_regime(df)
@@ -196,9 +209,21 @@ def candle_watcher():
                         if not allow_trade(trade, bias, regime):
                             continue
 
+                        if liquidity_block(trade, df):
+                            print("💧 Liquidity block")
+                            continue
+
                         trade = adjust_targets(trade, df)
 
-                        # ===== AI MODEL V2 =====
+                        # features for AI
+                        last = df.iloc[-1]
+                        trade["features"] = {
+                            "vwap_distance": abs(trade["entry"] - last["vwap"]),
+                            "candle_size": abs(trade["entry"] - trade["stoploss"]),
+                            "atr": last["atr"],
+                            "pattern_strength": trade.get("pattern_strength", 0),
+                        }
+
                         ai_result = ai_filter(trade, df, bias, regime)
 
                         if ai_result["decision"] == "SKIP":
@@ -211,7 +236,9 @@ def candle_watcher():
                             print("⚠ Reversal Warning")
 
                         last_trade_keys.add(key)
+
                         process_trade(trade)
+                        register_trade(trade)
 
             ticks_buffer = []
             current_minute = tick_minute
