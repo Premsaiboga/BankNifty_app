@@ -26,10 +26,10 @@ df = pd.read_csv(DATA_PATH)
 df["datetime"] = pd.to_datetime(df["datetime"])
 
 # =========================
-# INDICATORS (GLOBAL)
+# INDICATORS
 # =========================
-# VWAP (intraday proxy)
 df["tp"] = (df["high"] + df["low"] + df["close"]) / 3
+
 df["vwap"] = (
     df.groupby(df["datetime"].dt.date)["tp"]
     .expanding()
@@ -37,49 +37,42 @@ df["vwap"] = (
     .reset_index(level=0, drop=True)
 )
 
-# ATR
 high_low = df["high"] - df["low"]
 high_close = (df["high"] - df["close"].shift()).abs()
 low_close = (df["low"] - df["close"].shift()).abs()
+
 df["tr"] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
 df["atr"] = df["tr"].rolling(14).mean()
 
 # =========================
-# DAILY PIVOT POINTS
+# DAILY PIVOTS
 # =========================
 df["date"] = df["datetime"].dt.date
 
 daily = df.groupby("date").agg(
     high=("high", "max"),
     low=("low", "min"),
-    close=("close", "last")
+    close=("close", "last"),
 )
 
 daily["pivot"] = (daily["high"] + daily["low"] + daily["close"]) / 3
 daily["r1"] = 2 * daily["pivot"] - daily["low"]
 daily["s1"] = 2 * daily["pivot"] - daily["high"]
 
-# map back to intraday candles
 df = df.merge(
     daily[["pivot", "r1", "s1"]],
     left_on="date",
     right_index=True,
-    how="left"
+    how="left",
 )
 
-
 # =========================
-# TRADE EVALUATOR
+# TRADE RESULT CHECK
 # =========================
 def evaluate_trade(df, trade):
-    """
-    Returns:
-    1 = WIN
-    0 = LOSS (includes BE)
-    """
+
     entry = trade["entry"]
     sl = trade["stoploss"]
-    rr = trade["rr"]
     trade_type = trade["type"]
     entry_time = trade["time"]
 
@@ -90,9 +83,9 @@ def evaluate_trade(df, trade):
     idx = idx_list[0]
 
     if trade_type == "BUY":
-        target = entry + (entry - sl) * rr
+        target = entry + (entry - sl) * RR
     else:
-        target = entry - (sl - entry) * rr
+        target = entry - (sl - entry) * RR
 
     for i in range(idx + 1, len(df)):
         candle = df.iloc[i]
@@ -108,26 +101,35 @@ def evaluate_trade(df, trade):
             if candle["low"] <= target:
                 return 1
 
-    return 0  # BE treated as LOSS
+    return 0
+
 
 # =========================
 # INIT STRATEGIES
 # =========================
 strategies = [
-    VWAPPullbackStrategy(rr=RR),
-    PivotStrategy(rr=RR),
-    ABCDStrategy(rr=RR),
+    ("VWAP_PULLBACK", VWAPPullbackStrategy()),
+    ("ABCD", ABCDStrategy()),
 ]
 
 all_rows = []
 
 # =========================
-# BUILD TRAINING DATA
+# FAST VWAP + ABCD
 # =========================
-for strat in strategies:
-    trades = strat.generate_trades(df)
+for name, strat in strategies:
+
+    if hasattr(strat, "generate_trades"):
+        trades = strat.generate_trades(df)
+    else:
+        trades = strat.generate_signals(df)
 
     for trade in trades:
+
+        trade["strategy"] = trade.get("strategy", name)
+        trade["rr"] = trade.get("rr", RR)
+        trade["time"] = trade.get("time", df.iloc[-1]["datetime"])
+
         result = evaluate_trade(df, trade)
 
         all_rows.append({
@@ -135,15 +137,46 @@ for strat in strategies:
             "entry": trade["entry"],
             "stoploss": trade["stoploss"],
             "rr": trade["rr"],
-            "vwap_distance": trade.get("vwap_distance", 0),
+            "vwap_distance": abs(trade["entry"] - df.iloc[-1]["vwap"]),
             "candle_size": abs(trade["entry"] - trade["stoploss"]),
-            "atr": trade.get("atr", 0),
+            "atr": df.iloc[-1]["atr"],
             "pattern_strength": trade.get("pattern_strength", 0),
-            "result": result
+            "result": result,
+        })
+
+
+# =========================
+# FAST PIVOT GENERATION
+# =========================
+pivot_strategy = PivotStrategy()
+
+for i in range(100, len(df), 5):   # fast rolling window
+    sub_df = df.iloc[:i]
+
+    pivot_trades = pivot_strategy.generate_trades(sub_df)
+
+    for trade in pivot_trades:
+
+        trade["strategy"] = "PIVOT"
+        trade["rr"] = RR
+        trade["time"] = sub_df.iloc[-1]["datetime"]
+
+        result = evaluate_trade(df, trade)
+
+        all_rows.append({
+            "strategy": trade["strategy"],
+            "entry": trade["entry"],
+            "stoploss": trade["stoploss"],
+            "rr": trade["rr"],
+            "vwap_distance": abs(trade["entry"] - sub_df.iloc[-1]["vwap"]),
+            "candle_size": abs(trade["entry"] - trade["stoploss"]),
+            "atr": sub_df.iloc[-1]["atr"],
+            "pattern_strength": trade.get("pattern_strength", 0),
+            "result": result,
         })
 
 # =========================
-# SAVE CSV
+# SAVE
 # =========================
 df_out = pd.DataFrame(all_rows)
 df_out.to_csv(OUTPUT_PATH, index=False)

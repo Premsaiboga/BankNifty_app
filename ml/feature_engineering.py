@@ -1,31 +1,42 @@
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
+import numpy as np
 
-FEATURE_COLUMNS = [
-    "rr",
-    "vwap_distance",
-    "candle_size",
-    "atr",
-    "sl_points",
-    "entry_vs_vwap"
-]
+BIAS_MAP = {"BUY": 1, "SELL": -1, "NEUTRAL": 0}
+REGIME_MAP = {"TREND": 1, "RANGE": 0}
 
-def load_and_prepare_data(csv_path):
-    df = pd.read_csv(csv_path)
+def build_features(trade, df, bias, regime):
 
-    # ===== LABEL =====
-    df["label"] = df["result"].apply(lambda x: 1 if x.upper() == "WIN" else 0)
+    last = df.iloc[-1]
 
-    # ===== FEATURE ENGINEERING =====
-    df["sl_points"] = (df["entry"] - df["stoploss"]).abs()
-    df["entry_vs_vwap"] = df["vwap_distance"] / (df["atr"] + 1e-6)
+    entry = trade["entry"]
 
-    # ===== SELECT FEATURES =====
-    X = df[FEATURE_COLUMNS]
-    y = df["label"]
+    features = {}
 
-    # ===== SCALE =====
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    # ===== EXISTING =====
+    features["candle_size"] = last["high"] - last["low"]
+    features["atr"] = last["atr"]
 
-    return X_scaled, y, scaler
+    # ===== NEW MARKET FEATURES =====
+    features["market_bias"] = BIAS_MAP.get(bias, 0)
+    features["market_regime"] = REGIME_MAP.get(regime, 0)
+
+    # distance to VWAP
+    features["entry_vs_vwap"] = entry - last["vwap"]
+
+    # pivot distance
+    features["distance_to_pivot"] = abs(entry - last["pivot"])
+
+    # ATR expansion
+    atr_mean = df["atr"].rolling(20).mean().iloc[-1]
+    if atr_mean:
+        features["atr_ratio"] = last["atr"] / atr_mean
+    else:
+        features["atr_ratio"] = 1
+
+    # short momentum
+    if len(df) >= 5:
+        features["momentum_5"] = last["close"] - df.iloc[-5]["close"]
+    else:
+        features["momentum_5"] = 0
+
+    return features
