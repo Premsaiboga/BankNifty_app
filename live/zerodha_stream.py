@@ -35,9 +35,14 @@ def on_ticks(ws, ticks):
     ticks_buffer.extend(ticks)
 
 def on_connect(ws, response):
-    ws.subscribe([instrument_token])
-    ws.set_mode(ws.MODE_FULL, [instrument_token])
-    print("✅ Connected to Zerodha WebSocket")
+    print("✅ Websocket connected")
+
+    print("Instrument tokens:", instrument_tokens)
+
+    ws.subscribe(instrument_tokens)
+    ws.set_mode(ws.MODE_FULL, instrument_tokens)
+
+    print("✅ Subscription request sent")
 
 def on_close(ws, code, reason):
     print("❌ WebSocket closed:", reason)
