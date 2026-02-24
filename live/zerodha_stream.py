@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from collections import deque
 from live_engine import ai_filter
 
+
 # =========================
 # LOAD ENV
 # =========================
@@ -16,16 +17,17 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
-instrument_token = [260105]  # BANKNIFTY spot
+# IMPORTANT → must be LIST
+instrument_tokens = [260105]   # BANKNIFTY
+
 
 # =========================
 # GLOBAL STATE
 # =========================
 ticks_buffer = []
 current_minute = None
-
-# store last 30 candles
 candles = deque(maxlen=30)
+
 
 # =========================
 # TICK HANDLER
@@ -33,19 +35,29 @@ candles = deque(maxlen=30)
 def on_ticks(ws, ticks):
     global ticks_buffer
     ticks_buffer.extend(ticks)
+    print(f"📈 Ticks received: {len(ticks)}")
 
+
+# =========================
+# CONNECT HANDLER
+# =========================
 def on_connect(ws, response):
     print("✅ Websocket connected")
+    print("Instrument tokens:", instrument_tokens)
 
-    print("Instrument tokens:", instrument_token)
-
-    ws.subscribe(instrument_token)
-    ws.set_mode(ws.MODE_FULL, instrument_token)
+    ws.subscribe(instrument_tokens)
+    ws.set_mode(ws.MODE_FULL, instrument_tokens)
 
     print("✅ Subscription request sent")
 
+
 def on_close(ws, code, reason):
     print("❌ WebSocket closed:", reason)
+
+
+def on_error(ws, code, reason):
+    print("🚨 WebSocket error:", reason)
+
 
 # =========================
 # CANDLE BUILDER
@@ -62,20 +74,21 @@ def build_1min_candle(ticks):
         "high": float(df["last_price"].max()),
         "low": float(df["last_price"].min()),
         "close": float(df["last_price"].iloc[-1]),
+        "volume": float(df.get("volume_traded", pd.Series([0])).sum())
     }
+
 
 def candle_size(candle):
     return candle["high"] - candle["low"]
+
 
 # =========================
 # INDICATORS
 # =========================
 def calculate_vwap(candles):
-    prices = [
-        (c["high"] + c["low"] + c["close"]) / 3
-        for c in candles
-    ]
+    prices = [(c["high"] + c["low"] + c["close"]) / 3 for c in candles]
     return sum(prices) / len(prices)
+
 
 def calculate_atr(candles, period=14):
     if len(candles) < period + 1:
@@ -95,6 +108,7 @@ def calculate_atr(candles, period=14):
 
     return sum(trs) / period
 
+
 # =========================
 # STRATEGY
 # =========================
@@ -102,23 +116,21 @@ def vwap_long_setup(candle, vwap, atr):
     if atr is None:
         return None
 
-    candle_strength = candle_size(candle)
+    strength = candle_size(candle)
 
-    if candle["close"] > vwap:
-        if candle_strength >= 0.6 * atr:
-            return {
-                "entry": candle["close"],
-                "stoploss": candle["low"],
-                "rr": 4,
-                "vwap_distance": candle["close"] - vwap,
-                "candle_size": candle_strength,
-                "atr": atr
-            }
+    if candle["close"] > vwap and strength >= 0.6 * atr:
+        return {
+            "entry": candle["close"],
+            "stoploss": candle["low"],
+            "rr": 4,
+            "atr": atr
+        }
 
     return None
 
+
 # =========================
-# MINUTE WATCHER (CORRECT)
+# MINUTE WATCHER
 # =========================
 def candle_watcher():
     global ticks_buffer, current_minute
@@ -129,56 +141,47 @@ def candle_watcher():
         if current_minute is None:
             current_minute = now
 
-        # RUN ONLY ON NEW MINUTE
         if now > current_minute:
             candle = build_1min_candle(ticks_buffer)
 
             if candle:
                 candles.append(candle)
 
+                print("\n🕯 New Candle:", candle)
+
                 if len(candles) >= 15:
                     vwap = calculate_vwap(candles)
                     atr = calculate_atr(candles)
-                    size = candle_size(candle)
-                    vwap_dist = candle["close"] - vwap
 
                     trade = vwap_long_setup(candle, vwap, atr)
-
-                    print("\n🕯 New 1-min Candle")
-                    print("Time        :", candle["time"])
-                    print("Close       :", candle["close"])
-                    print("VWAP        :", round(vwap, 2))
-                    print("ATR         :", round(atr, 2))
-                    print("Candle size :", round(size, 2))
-                    print("VWAP dist   :", round(vwap_dist, 2))
 
                     if trade:
                         decision = ai_filter(trade)
                         print("🎯 VWAP SETUP FOUND")
-                        print("AI Decision :", decision["decision"])
-                        print("Probability :", decision["probability"])
+                        print(decision)
                     else:
-                        print("No VWAP setup")
-                else:
-                    print("🕯 Candle (warming up):", candle)
+                        print("No setup")
 
             ticks_buffer = []
             current_minute = now
 
         time.sleep(1)
 
+
 # =========================
-# START EVERYTHING
+# START WEBSOCKET
 # =========================
 kws = KiteTicker(API_KEY, ACCESS_TOKEN)
+
 kws.on_ticks = on_ticks
 kws.on_connect = on_connect
 kws.on_close = on_close
+kws.on_error = on_error
 
 kws.connect(threaded=True)
 
 threading.Thread(target=candle_watcher, daemon=True).start()
 
-# keep main thread alive
+# keep alive
 while True:
     time.sleep(1)
