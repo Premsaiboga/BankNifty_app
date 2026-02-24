@@ -17,7 +17,6 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
-# BANKNIFTY instrument
 instrument_tokens = [260105]
 
 
@@ -30,6 +29,15 @@ candles = deque(maxlen=30)
 
 
 # =========================
+# HELPER
+# =========================
+def candles_to_df():
+    if len(candles) == 0:
+        return None
+    return pd.DataFrame(list(candles))
+
+
+# =========================
 # TICK HANDLER
 # =========================
 def on_ticks(ws, ticks):
@@ -39,10 +47,8 @@ def on_ticks(ws, ticks):
 
 def on_connect(ws, response):
     print("✅ Websocket connected")
-
     ws.subscribe(instrument_tokens)
     ws.set_mode(ws.MODE_FULL, instrument_tokens)
-
     print("✅ Subscription sent")
 
 
@@ -125,7 +131,6 @@ def vwap_long_setup(candle, vwap, atr):
 
 # =========================
 # CANDLE WATCHER
-# (EXCHANGE TIME BASED)
 # =========================
 def candle_watcher():
     global ticks_buffer, current_minute
@@ -142,7 +147,6 @@ def candle_watcher():
         if current_minute is None:
             current_minute = minute
 
-        # new candle detected
         if minute > current_minute:
 
             candle = build_1min_candle(ticks_buffer)
@@ -160,7 +164,14 @@ def candle_watcher():
                     trade = vwap_long_setup(candle, vwap, atr)
 
                     if trade:
-                        decision = ai_filter(trade)
+                        df = candles_to_df()
+
+                        if df is None or len(df) < 15:
+                            print("⏳ Waiting for enough candles for AI...")
+                            continue
+
+                        decision = ai_filter(trade, df, None, None)
+
                         print("🎯 VWAP SETUP FOUND")
                         print(decision)
                     else:
@@ -182,13 +193,10 @@ kws.on_ticks = on_ticks
 kws.on_close = on_close
 kws.on_error = on_error
 
-# start candle engine
 threading.Thread(target=candle_watcher, daemon=True).start()
 
 print("Starting WebSocket...")
 kws.connect(threaded=True)
 
-
-# keep main alive
 while True:
     time.sleep(1)
