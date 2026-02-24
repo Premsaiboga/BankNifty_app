@@ -16,7 +16,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
-instrument_token = 260105  # BANKNIFTY spot
+instrument_token = [260105]  # BANKNIFTY spot
 
 # =========================
 # GLOBAL STATE
@@ -37,10 +37,10 @@ def on_ticks(ws, ticks):
 def on_connect(ws, response):
     print("✅ Websocket connected")
 
-    print("Instrument tokens:", instrument_tokens)
+    print("Instrument tokens:", instrument_token)
 
-    ws.subscribe(instrument_tokens)
-    ws.set_mode(ws.MODE_FULL, instrument_tokens)
+    ws.subscribe(instrument_token)
+    ws.set_mode(ws.MODE_FULL, instrument_token)
 
     print("✅ Subscription request sent")
 
