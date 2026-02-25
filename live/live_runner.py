@@ -29,12 +29,13 @@ candles = deque(maxlen=60)
 
 
 # =========================
-# SAFE DATAFRAME BUILDER
+# REQUIRED ML COLUMNS
 # =========================
 REQUIRED_COLUMNS = [
-    "open","high","low","close",
-    "vwap","atr","pivot","bias","regime"
+    "open", "high", "low", "close",
+    "vwap", "atr", "pivot", "bias", "regime"
 ]
+
 
 def candles_to_df():
     if len(candles) == 0:
@@ -42,7 +43,7 @@ def candles_to_df():
 
     df = pd.DataFrame(list(candles))
 
-    # 🔥 guarantee columns exist (NO MORE KEYERROR EVER)
+    # ensure ML columns always exist
     for col in REQUIRED_COLUMNS:
         if col not in df.columns:
             df[col] = 0.0
@@ -91,30 +92,29 @@ def build_1min_candle(ticks):
 # INDICATORS
 # =========================
 def calculate_vwap(candle_list):
-    prices = [(c["high"]+c["low"]+c["close"])/3 for c in candle_list]
-    return sum(prices)/len(prices)
+    prices = [(c["high"] + c["low"] + c["close"]) / 3 for c in candle_list]
+    return sum(prices) / len(prices)
 
 
 def calculate_atr(candle_list, period=14):
-    if len(candle_list) < period+1:
+    if len(candle_list) < period + 1:
         return None
 
-    trs=[]
-    for i in range(1,period+1):
-        curr=candle_list[-i]
-        prev=candle_list[-i-1]
+    trs = []
+    for i in range(1, period + 1):
+        curr = candle_list[-i]
+        prev = candle_list[-i - 1]
 
-        tr=max(
-            curr["high"]-curr["low"],
-            abs(curr["high"]-prev["close"]),
-            abs(curr["low"]-prev["close"]),
+        tr = max(
+            curr["high"] - curr["low"],
+            abs(curr["high"] - prev["close"]),
+            abs(curr["low"] - prev["close"]),
         )
         trs.append(tr)
 
-    return sum(trs)/period
+    return sum(trs) / period
 
 
-# SIMPLE DAILY PIVOT (SAFE DEFAULT)
 def calculate_pivot(c):
     return (c["high"] + c["low"] + c["close"]) / 3
 
@@ -130,11 +130,13 @@ def vwap_long_setup(candle, vwap, atr):
 
     if candle["close"] > vwap and strength >= 0.6 * atr:
         return {
+            "strategy": "VWAP_LONG",   # ✅ FIX (required by AI)
             "entry": candle["close"],
             "stoploss": candle["low"],
             "rr": 4,
             "atr": atr
         }
+
     return None
 
 
@@ -168,8 +170,6 @@ def candle_watcher():
             candle["vwap"] = vwap
             candle["atr"] = atr if atr else 0.0
             candle["pivot"] = calculate_pivot(candle)
-
-            # safe placeholders
             candle["bias"] = 0
             candle["regime"] = 0
 
