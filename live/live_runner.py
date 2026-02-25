@@ -17,7 +17,7 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 ACCESS_TOKEN = os.getenv("ACCESS_TOKEN")
 
-instrument_tokens = [260105]
+instrument_tokens = [260105]  # BANKNIFTY
 
 
 # =========================
@@ -85,19 +85,19 @@ def candle_size(c):
 # =========================
 # INDICATORS
 # =========================
-def calculate_vwap(candles):
-    prices = [(c["high"] + c["low"] + c["close"]) / 3 for c in candles]
+def calculate_vwap(candle_list):
+    prices = [(c["high"] + c["low"] + c["close"]) / 3 for c in candle_list]
     return sum(prices) / len(prices)
 
 
-def calculate_atr(candles, period=14):
-    if len(candles) < period + 1:
+def calculate_atr(candle_list, period=14):
+    if len(candle_list) < period + 1:
         return None
 
     trs = []
     for i in range(1, period + 1):
-        curr = candles[-i]
-        prev = candles[-i - 1]
+        curr = candle_list[-i]
+        prev = candle_list[-i - 1]
 
         tr = max(
             curr["high"] - curr["low"],
@@ -147,33 +147,41 @@ def candle_watcher():
         if current_minute is None:
             current_minute = minute
 
+        # ===== NEW MINUTE DETECTED =====
         if minute > current_minute:
 
             candle = build_1min_candle(ticks_buffer)
 
             if candle:
+
+                # ---- calculate indicators BEFORE saving ----
+                temp = list(candles) + [candle]
+
+                vwap = calculate_vwap(temp)
+                atr = calculate_atr(temp)
+
+                candle["vwap"] = vwap
+                candle["atr"] = atr
+
                 candles.append(candle)
 
                 print("\n🕯 NEW 1-MIN CANDLE")
                 print(candle)
 
-                if len(candles) >= 15:
-                    vwap = calculate_vwap(candles)
-                    atr = calculate_atr(candles)
-
+                # ---- WAIT FOR INDICATOR WARMUP ----
+                if atr is None:
+                    print("⏳ ATR warming up...")
+                else:
                     trade = vwap_long_setup(candle, vwap, atr)
 
                     if trade:
                         df = candles_to_df()
 
-                        if df is None or len(df) < 15:
-                            print("⏳ Waiting for enough candles for AI...")
-                            continue
+                        if df is not None and "atr" in df.columns:
+                            decision = ai_filter(trade, df, None, None)
 
-                        decision = ai_filter(trade, df, None, None)
-
-                        print("🎯 VWAP SETUP FOUND")
-                        print(decision)
+                            print("🎯 VWAP SETUP FOUND")
+                            print(decision)
                     else:
                         print("No setup")
 
