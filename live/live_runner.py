@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from collections import deque
 
 from .live_engine import ai_filter
-from .telegram_alert import send_telegram_alert   # ✅ correct import
+from .telegram_alert import send_telegram_alert
 
 
 # =========================
@@ -121,7 +121,7 @@ def calculate_pivot(c):
 
 
 # =========================
-# STRATEGY
+# STRATEGY (VWAP PULLBACK)
 # =========================
 def vwap_long_setup(candle, vwap, atr):
     if atr is None:
@@ -131,7 +131,7 @@ def vwap_long_setup(candle, vwap, atr):
 
     if candle["close"] > vwap and strength >= 0.6 * atr:
         return {
-            "strategy": "DEFAULT",
+            "strategy": "VWAP_PULLBACK",
             "entry": candle["close"],
             "stoploss": candle["low"],
             "rr": 4,
@@ -139,6 +139,37 @@ def vwap_long_setup(candle, vwap, atr):
         }
 
     return None
+
+
+# =========================
+# TELEGRAM FORMATTER
+# =========================
+def send_trade_alert(trade, decision):
+
+    entry = trade["entry"]
+    sl = trade["stoploss"]
+    rr = trade["rr"]
+
+    trade_type = "BUY" if entry > sl else "SELL"
+    risk = abs(entry - sl)
+
+    if trade_type == "BUY":
+        target = round(entry + (risk * rr), 2)
+    else:
+        target = round(entry - (risk * rr), 2)
+
+    msg = (
+        f"📌 *BANKNIFTY TRADE ALERT*\n\n"
+        f"*Strategy* : {trade['strategy']}\n"
+        f"*Type*     : {trade_type}\n"
+        f"*Entry*    : {entry}\n"
+        f"*SL*       : {sl}\n"
+        f"*Target*   : {target} (RR 1:{rr})\n"
+        f"*AI Prob*  : {decision['probability']}\n"
+        f"*Time*     : {datetime.now().strftime('%I:%M %p')}"
+    )
+
+    send_telegram_alert(msg)
 
 
 # =========================
@@ -183,28 +214,13 @@ def candle_watcher():
 
                 if trade:
                     df = candles_to_df()
-
                     decision = ai_filter(trade, df, None, None)
 
                     print("🎯 VWAP SETUP FOUND")
                     print(decision)
 
-                    # ======================
-                    # TELEGRAM ALERT
-                    # ======================
                     if decision["decision"] == "TAKE":
-
-                        msg = (
-                            f"🚨 BANKNIFTY SIGNAL\n\n"
-                            f"Strategy: {trade['strategy']}\n"
-                            f"Entry: {trade['entry']}\n"
-                            f"SL: {trade['stoploss']}\n"
-                            f"RR: {trade['rr']}\n\n"
-                            f"AI Probability: {decision['probability']}\n"
-                            f"Threshold: {decision['threshold']}"
-                        )
-
-                        send_telegram_alert(msg)
+                        send_trade_alert(trade, decision)
 
                 else:
                     print("No setup")
