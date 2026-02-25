@@ -6,7 +6,9 @@ import threading
 import os
 from dotenv import load_dotenv
 from collections import deque
+
 from .live_engine import ai_filter
+from .telegram_alert import send_telegram_alert   # ✅ correct import
 
 
 # =========================
@@ -43,7 +45,6 @@ def candles_to_df():
 
     df = pd.DataFrame(list(candles))
 
-    # guarantee ML columns exist
     for col in REQUIRED_COLUMNS:
         if col not in df.columns:
             df[col] = 0.0
@@ -130,7 +131,6 @@ def vwap_long_setup(candle, vwap, atr):
 
     if candle["close"] > vwap and strength >= 0.6 * atr:
         return {
-            # ✅ SAFE NAME (ai_filter will map automatically)
             "strategy": "DEFAULT",
             "entry": candle["close"],
             "stoploss": candle["low"],
@@ -159,11 +159,9 @@ def candle_watcher():
         if current_minute is None:
             current_minute = minute
 
-        # ===== NEW CANDLE =====
         if minute > current_minute:
 
             candle = build_1min_candle(ticks_buffer)
-
             temp = list(candles) + [candle]
 
             vwap = calculate_vwap(temp)
@@ -186,11 +184,28 @@ def candle_watcher():
                 if trade:
                     df = candles_to_df()
 
-                    if df is not None:
-                        decision = ai_filter(trade, df, None, None)
+                    decision = ai_filter(trade, df, None, None)
 
-                        print("🎯 VWAP SETUP FOUND")
-                        print(decision)
+                    print("🎯 VWAP SETUP FOUND")
+                    print(decision)
+
+                    # ======================
+                    # TELEGRAM ALERT
+                    # ======================
+                    if decision["decision"] == "TAKE":
+
+                        msg = (
+                            f"🚨 BANKNIFTY SIGNAL\n\n"
+                            f"Strategy: {trade['strategy']}\n"
+                            f"Entry: {trade['entry']}\n"
+                            f"SL: {trade['stoploss']}\n"
+                            f"RR: {trade['rr']}\n\n"
+                            f"AI Probability: {decision['probability']}\n"
+                            f"Threshold: {decision['threshold']}"
+                        )
+
+                        send_telegram_alert(msg)
+
                 else:
                     print("No setup")
             else:
