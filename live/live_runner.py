@@ -43,7 +43,7 @@ def candles_to_df():
 
     df = pd.DataFrame(list(candles))
 
-    # ensure ML columns always exist
+    # guarantee ML columns exist
     for col in REQUIRED_COLUMNS:
         if col not in df.columns:
             df[col] = 0.0
@@ -130,7 +130,8 @@ def vwap_long_setup(candle, vwap, atr):
 
     if candle["close"] > vwap and strength >= 0.6 * atr:
         return {
-            "strategy": "VWAP_LONG",   # ✅ FIX (required by AI)
+            # ✅ SAFE NAME (ai_filter will map automatically)
+            "strategy": "DEFAULT",
             "entry": candle["close"],
             "stoploss": candle["low"],
             "rr": 4,
@@ -158,6 +159,7 @@ def candle_watcher():
         if current_minute is None:
             current_minute = minute
 
+        # ===== NEW CANDLE =====
         if minute > current_minute:
 
             candle = build_1min_candle(ticks_buffer)
@@ -183,10 +185,12 @@ def candle_watcher():
 
                 if trade:
                     df = candles_to_df()
-                    decision = ai_filter(trade, df, None, None)
 
-                    print("🎯 VWAP SETUP FOUND")
-                    print(decision)
+                    if df is not None:
+                        decision = ai_filter(trade, df, None, None)
+
+                        print("🎯 VWAP SETUP FOUND")
+                        print(decision)
                 else:
                     print("No setup")
             else:
