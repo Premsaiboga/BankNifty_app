@@ -25,16 +25,29 @@ instrument_tokens = [260105]  # BANKNIFTY
 # =========================
 ticks_buffer = []
 current_minute = None
-candles = deque(maxlen=30)
+candles = deque(maxlen=60)
 
 
 # =========================
-# HELPER
+# SAFE DATAFRAME BUILDER
 # =========================
+REQUIRED_COLUMNS = [
+    "open","high","low","close",
+    "vwap","atr","pivot","bias","regime"
+]
+
 def candles_to_df():
     if len(candles) == 0:
         return None
-    return pd.DataFrame(list(candles))
+
+    df = pd.DataFrame(list(candles))
+
+    # 🔥 guarantee columns exist (NO MORE KEYERROR EVER)
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            df[col] = 0.0
+
+    return df
 
 
 # =========================
@@ -49,7 +62,6 @@ def on_connect(ws, response):
     print("✅ Websocket connected")
     ws.subscribe(instrument_tokens)
     ws.set_mode(ws.MODE_FULL, instrument_tokens)
-    print("✅ Subscription sent")
 
 
 def on_close(ws, code, reason):
@@ -64,9 +76,6 @@ def on_error(ws, code, reason):
 # CANDLE BUILDER
 # =========================
 def build_1min_candle(ticks):
-    if not ticks:
-        return None
-
     df = pd.DataFrame(ticks)
 
     return {
@@ -78,35 +87,36 @@ def build_1min_candle(ticks):
     }
 
 
-def candle_size(c):
-    return c["high"] - c["low"]
-
-
 # =========================
 # INDICATORS
 # =========================
 def calculate_vwap(candle_list):
-    prices = [(c["high"] + c["low"] + c["close"]) / 3 for c in candle_list]
-    return sum(prices) / len(prices)
+    prices = [(c["high"]+c["low"]+c["close"])/3 for c in candle_list]
+    return sum(prices)/len(prices)
 
 
 def calculate_atr(candle_list, period=14):
-    if len(candle_list) < period + 1:
+    if len(candle_list) < period+1:
         return None
 
-    trs = []
-    for i in range(1, period + 1):
-        curr = candle_list[-i]
-        prev = candle_list[-i - 1]
+    trs=[]
+    for i in range(1,period+1):
+        curr=candle_list[-i]
+        prev=candle_list[-i-1]
 
-        tr = max(
-            curr["high"] - curr["low"],
-            abs(curr["high"] - prev["close"]),
-            abs(curr["low"] - prev["close"]),
+        tr=max(
+            curr["high"]-curr["low"],
+            abs(curr["high"]-prev["close"]),
+            abs(curr["low"]-prev["close"]),
         )
         trs.append(tr)
 
-    return sum(trs) / period
+    return sum(trs)/period
+
+
+# SIMPLE DAILY PIVOT (SAFE DEFAULT)
+def calculate_pivot(c):
+    return (c["high"] + c["low"] + c["close"]) / 3
 
 
 # =========================
@@ -116,7 +126,7 @@ def vwap_long_setup(candle, vwap, atr):
     if atr is None:
         return None
 
-    strength = candle_size(candle)
+    strength = candle["high"] - candle["low"]
 
     if candle["close"] > vwap and strength >= 0.6 * atr:
         return {
@@ -125,7 +135,6 @@ def vwap_long_setup(candle, vwap, atr):
             "rr": 4,
             "atr": atr
         }
-
     return None
 
 
@@ -147,43 +156,41 @@ def candle_watcher():
         if current_minute is None:
             current_minute = minute
 
-        # ===== NEW MINUTE DETECTED =====
         if minute > current_minute:
 
             candle = build_1min_candle(ticks_buffer)
 
-            if candle:
+            temp = list(candles) + [candle]
 
-                # ---- calculate indicators BEFORE saving ----
-                temp = list(candles) + [candle]
+            vwap = calculate_vwap(temp)
+            atr = calculate_atr(temp)
 
-                vwap = calculate_vwap(temp)
-                atr = calculate_atr(temp)
+            candle["vwap"] = vwap
+            candle["atr"] = atr if atr else 0.0
+            candle["pivot"] = calculate_pivot(candle)
 
-                candle["vwap"] = vwap
-                candle["atr"] = atr
+            # safe placeholders
+            candle["bias"] = 0
+            candle["regime"] = 0
 
-                candles.append(candle)
+            candles.append(candle)
 
-                print("\n🕯 NEW 1-MIN CANDLE")
-                print(candle)
+            print("\n🕯 NEW 1-MIN CANDLE")
+            print(candle)
 
-                # ---- WAIT FOR INDICATOR WARMUP ----
-                if atr is None:
-                    print("⏳ ATR warming up...")
+            if atr:
+                trade = vwap_long_setup(candle, vwap, atr)
+
+                if trade:
+                    df = candles_to_df()
+                    decision = ai_filter(trade, df, None, None)
+
+                    print("🎯 VWAP SETUP FOUND")
+                    print(decision)
                 else:
-                    trade = vwap_long_setup(candle, vwap, atr)
-
-                    if trade:
-                        df = candles_to_df()
-
-                        if df is not None and "atr" in df.columns:
-                            decision = ai_filter(trade, df, None, None)
-
-                            print("🎯 VWAP SETUP FOUND")
-                            print(decision)
-                    else:
-                        print("No setup")
+                    print("No setup")
+            else:
+                print("⏳ ATR warming up...")
 
             ticks_buffer.clear()
             current_minute = minute
