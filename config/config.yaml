@@ -1,16 +1,48 @@
 symbol: BANKNIFTY
+instrument_token: 260105
 
+# Timeframes
 timeframe_entry: "5m"
 timeframe_bias: "15m"
 
+# Trading hours (IST)
 trade_start: "09:30"
 trade_end: "14:45"
+orb_end: "09:45"  # ORB formation period
 
-max_trades_per_day: 3
+# Trade limits
+max_trades_per_day: 5
 
+# Risk-Reward ratios (realistic for messy markets)
+# v1 had RR=4 which almost never hits in choppy conditions
 risk_reward:
-  - 2
-  - 3
-  - 4
+  ORB: 2.0
+  EMA_SCALP: 1.5
+  VWAP_REVERSION: 1.5
+  MOMENTUM_SURGE: 2.0
+  PIVOT_SCALP: 1.5
 
-ml_probability_threshold: 0.65
+# AI probability thresholds (per strategy)
+# Lower thresholds = more trades = matches real market conditions
+ml_thresholds:
+  ORB: 0.48
+  EMA_SCALP: 0.46
+  VWAP_REVERSION: 0.45
+  MOMENTUM_SURGE: 0.48
+  PIVOT_SCALP: 0.46
+
+# Capital management
+capital: 10000
+lot_size: 15
+max_daily_loss: 3000
+
+# BankNifty option config
+strike_interval: 100
+
+# Strategies enabled (all 5 for messy markets)
+strategies:
+  - ORB
+  - EMA_SCALP
+  - VWAP_REVERSION
+  - MOMENTUM_SURGE
+  - PIVOT_SCALP
