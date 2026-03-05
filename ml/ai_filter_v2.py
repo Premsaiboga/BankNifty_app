@@ -56,11 +56,10 @@ def _load_model():
 # =========================
 # STRATEGY THRESHOLDS
 # =========================
-# All 5 strategies enabled with V3 pullback entries.
+# 4 strategies enabled (MOMENTUM_SURGE disabled — 37% OOS WR).
 # Model will override with optimal thresholds from training.
 STRATEGY_THRESHOLDS = {
     "ORB": 0.45,
-    "MOMENTUM_SURGE": 0.45,
     "PIVOT_SCALP": 0.45,
     "VWAP_REVERSION": 0.45,
     "EMA_SCALP": 0.45,

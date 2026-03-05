@@ -46,7 +46,6 @@ from strategy.indicators import calculate_all_indicators
 from strategy.orb_strategy import ORBStrategy
 from strategy.ema_scalp_strategy import EMAScalpStrategy
 from strategy.vwap_reversion_strategy import VWAPReversionStrategy
-from strategy.momentum_surge_strategy import MomentumSurgeStrategy
 from strategy.pivot_scalp_strategy import PivotScalpStrategy
 from live.live_engine_v2 import process_trade_v2
 from live.telegram_alert import send_telegram_alert
@@ -115,7 +114,6 @@ strategies = [
     ORBStrategy(rr=2.0),
     EMAScalpStrategy(rr=2.0),
     VWAPReversionStrategy(rr=2.0),
-    MomentumSurgeStrategy(rr=2.0),
     PivotScalpStrategy(rr=2.0),
 ]
 
