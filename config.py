@@ -1,24 +1,24 @@
 # =========================
-# V2 CONFIG - Synced with ai_filter_v2.py (OOS-optimized thresholds)
+# V3 CONFIG - Pullback-entry strategies with 1:2 RR
 # =========================
 
-# Strategy-specific AI thresholds (OOS-optimized, model overrides at load)
-# VWAP_REVERSION and EMA_SCALP disabled (no OOS edge)
+# Strategy-specific AI thresholds (model overrides at load)
+# All 5 strategies re-enabled with V3 pullback entry logic
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.40,
-    "MOMENTUM_SURGE": 0.48,
-    "PIVOT_SCALP": 0.40,
-    "VWAP_REVERSION": 0.90,   # Disabled (breakeven after costs)
-    "EMA_SCALP": 0.90,        # Disabled (insufficient OOS data)
+    "ORB": 0.45,
+    "MOMENTUM_SURGE": 0.45,
+    "PIVOT_SCALP": 0.45,
+    "VWAP_REVERSION": 0.45,
+    "EMA_SCALP": 0.45,
 }
 
-# Default risk-reward ratios per strategy
+# Default risk-reward ratios per strategy (1:2 RR)
 STRATEGY_RR = {
     "ORB": 2.0,
-    "EMA_SCALP": 1.5,
-    "VWAP_REVERSION": 1.5,
+    "EMA_SCALP": 2.0,
+    "VWAP_REVERSION": 2.0,
     "MOMENTUM_SURGE": 2.0,
-    "PIVOT_SCALP": 1.5,
+    "PIVOT_SCALP": 2.0,
 }
 
 # Max trades per day (across all strategies)

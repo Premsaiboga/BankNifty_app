@@ -1,8 +1,10 @@
 """
-Build Training Data V2
+Build Training Data V3
 ======================
-Generates labeled training data from all 5 strategies on historical data.
-Uses comprehensive feature engineering (22 features).
+Generates labeled training data with TRAILING STOP evaluation.
+A trade is labeled WIN (1) if it exits with any profit (target hit,
+trail win, or EOD win). This teaches the ML model to select trades
+that will be profitable under our trailing stop exit system.
 """
 
 import sys
@@ -26,7 +28,7 @@ from ml.features import FEATURE_COLUMNS
 # =========================
 DATA_PATH = PROJECT_ROOT / "data/historical/banknifty_5m.csv"
 OUTPUT_PATH = PROJECT_ROOT / "ml/training_data_v2.csv"
-SLIPPAGE_POINTS = 5  # Realistic slippage per trade (BankNifty points)
+SLIPPAGE_POINTS = 5
 
 # =========================
 # LOAD DATA
@@ -43,18 +45,16 @@ print(f"Loaded {len(df)} candles from {df['datetime'].iloc[0]} to {df['datetime'
 print("Calculating indicators...")
 df = calculate_all_indicators(df)
 
-# Drop rows with NaN indicators (first ~20 candles)
 df = df.dropna(subset=["atr", "rsi_14", "ema_9", "ema_21", "bb_upper"]).reset_index(drop=True)
 print(f"After indicator warmup: {len(df)} candles")
 
 # =========================
-# TRADE EVALUATOR
+# TRADE EVALUATOR WITH TRAILING STOPS
 # =========================
 def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
     """
-    Evaluate if trade hits target or SL first.
-    max_candles: Max forward look (60 x 5min = 5 hours)
-    Returns: 1=WIN, 0=LOSS
+    Evaluate trade with trailing stop logic.
+    Returns: 1 = profitable exit (target/trail/breakeven/EOD+), 0 = loss
     """
     entry = trade["entry"]
     sl = trade["stoploss"]
@@ -62,7 +62,7 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
     trade_type = trade["type"]
     entry_time = trade["time"]
 
-    # Apply slippage: worse entry price
+    # Apply slippage
     if trade_type == "BUY":
         entry += SLIPPAGE_POINTS
         target += SLIPPAGE_POINTS
@@ -76,31 +76,66 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
 
     idx = idx_list[0]
     end_idx = min(idx + max_candles, len(df))
+    entry_date = df.iloc[idx]["date"]
+
+    sl_dist = abs(entry - sl)
+    if sl_dist == 0:
+        return 0
+
+    current_sl = sl
+    best_move = 0
 
     for i in range(idx + 1, end_idx):
         candle = df.iloc[i]
 
-        # Check for new day (close open positions at end of day)
-        if candle["date"] != df.iloc[idx]["date"]:
-            # Check if we'd be profitable at day end
-            prev_candle = df.iloc[i - 1]
+        # End of day
+        if candle["date"] != entry_date:
+            prev = df.iloc[i - 1]
             if trade_type == "BUY":
-                return 1 if prev_candle["close"] > entry else 0
+                return 1 if prev["close"] > entry else 0
             else:
-                return 1 if prev_candle["close"] < entry else 0
+                return 1 if prev["close"] < entry else 0
 
+        # Calculate favorable move
         if trade_type == "BUY":
-            if candle["low"] <= sl:
-                return 0  # SL hit
-            if candle["high"] >= target:
-                return 1  # Target hit
+            move_r = (candle["high"] - entry) / sl_dist
         else:
-            if candle["high"] >= sl:
-                return 0  # SL hit
-            if candle["low"] <= target:
-                return 1  # Target hit
+            move_r = (entry - candle["low"]) / sl_dist
 
-    return 0  # Didn't reach either → loss
+        best_move = max(best_move, move_r)
+
+        # Trail: breakeven at 0.8R, trail at 1.2R+
+        if best_move >= 0.8:
+            if trade_type == "BUY":
+                new_sl = entry + 2
+                current_sl = max(current_sl, new_sl)
+            else:
+                new_sl = entry - 2
+                current_sl = min(current_sl, new_sl)
+
+        if best_move >= 1.2:
+            if trade_type == "BUY":
+                trail_sl = entry + (best_move - 0.6) * sl_dist
+                current_sl = max(current_sl, trail_sl)
+            else:
+                trail_sl = entry - (best_move - 0.6) * sl_dist
+                current_sl = min(current_sl, trail_sl)
+
+        # Check SL
+        if trade_type == "BUY":
+            if candle["low"] <= current_sl:
+                pnl = current_sl - entry
+                return 1 if pnl > 0 else 0
+            if candle["high"] >= target:
+                return 1
+        else:
+            if candle["high"] >= current_sl:
+                pnl = entry - current_sl
+                return 1 if pnl > 0 else 0
+            if candle["low"] <= target:
+                return 1
+
+    return 0  # Timeout = loss
 
 
 # =========================
@@ -108,10 +143,10 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
 # =========================
 strategies = [
     ORBStrategy(rr=2.0),
-    EMAScalpStrategy(rr=1.5),
-    VWAPReversionStrategy(rr=1.5),
+    EMAScalpStrategy(rr=2.0),
+    VWAPReversionStrategy(rr=2.0),
     MomentumSurgeStrategy(rr=2.0),
-    PivotScalpStrategy(rr=1.5),
+    PivotScalpStrategy(rr=2.0),
 ]
 
 # =========================
@@ -153,7 +188,7 @@ for strat in strategies:
     total = wins + losses
     wr = (wins / total * 100) if total > 0 else 0
     strategy_counts[trade["strategy"]] = {"total": total, "wins": wins, "wr": wr}
-    print(f"  Results: {wins}W / {losses}L = {wr:.1f}% win rate")
+    print(f"  Results (with trailing): {wins}W / {losses}L = {wr:.1f}% win rate")
 
 # =========================
 # SAVE CSV
@@ -162,7 +197,7 @@ df_out = pd.DataFrame(all_rows)
 df_out.to_csv(OUTPUT_PATH, index=False)
 
 print(f"\n{'='*50}")
-print(f"TRAINING DATA V2 SUMMARY")
+print(f"TRAINING DATA V3 SUMMARY (with trailing stops)")
 print(f"{'='*50}")
 print(f"Total samples: {len(df_out)}")
 print(f"Win rate: {df_out['result'].mean()*100:.1f}%")

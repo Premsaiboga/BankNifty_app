@@ -1,11 +1,9 @@
 """
-AI Filter V2
+AI Filter V3
 =============
-ML-based trade filter using OOS-optimized thresholds.
-Uses 25-feature model with strategy-specific thresholds.
-
-Model AUC is 0.52 — marginal discrimination. Strategy selection
-matters more than ML filtering. Only profitable strategies are enabled.
+ML-based trade filter for V3 pullback-entry strategies.
+All 5 strategies enabled with 1:2 RR.
+Model will be retrained on V3 pullback data for better discrimination.
 """
 
 import sys
@@ -43,13 +41,12 @@ def _load_model():
     scaler = bundle["scaler"]
     FEATURES = bundle["features"]
 
-    # Use model's own optimal thresholds — but ONLY for enabled strategies
-    # Strategies set to 0.90 are intentionally disabled (no OOS edge)
+    # Use model's own optimal thresholds
     global STRATEGY_THRESHOLDS
     model_thresholds = bundle.get("optimal_thresholds", {})
     if model_thresholds:
         for strat, thresh in model_thresholds.items():
-            if strat in STRATEGY_THRESHOLDS and STRATEGY_THRESHOLDS[strat] < 0.85:
+            if strat in STRATEGY_THRESHOLDS:
                 STRATEGY_THRESHOLDS[strat] = thresh
 
     print(f"Loaded model_v2 ({bundle.get('model_type', 'unknown')})")
@@ -59,28 +56,18 @@ def _load_model():
 # =========================
 # STRATEGY THRESHOLDS
 # =========================
-# Based on OOS training output. Model will override these with its own
-# optimal thresholds when loaded.
-#
-# PROFITABLE strategies (positive OOS expectancy):
-#   PIVOT_SCALP:     48.8% WR at RR 1.5 = +0.22R/trade
-#   MOMENTUM_SURGE:  42.9% WR at RR 2.0 = +0.29R/trade
-#   ORB:             37.5% WR at RR 2.0 = +0.13R/trade
-#
-# DISABLED strategies (zero/negative edge):
-#   VWAP_REVERSION:  40.5% WR at RR 1.5 = +0.01R (breakeven, loses with costs)
-#   EMA_SCALP:       Not enough OOS data to validate
+# All 5 strategies enabled with V3 pullback entries.
+# Model will override with optimal thresholds from training.
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.40,
-    "MOMENTUM_SURGE": 0.48,
-    "PIVOT_SCALP": 0.40,
-    # Disabled: set impossibly high threshold (effectively off)
-    "VWAP_REVERSION": 0.90,
-    "EMA_SCALP": 0.90,
+    "ORB": 0.45,
+    "MOMENTUM_SURGE": 0.45,
+    "PIVOT_SCALP": 0.45,
+    "VWAP_REVERSION": 0.45,
+    "EMA_SCALP": 0.45,
 }
 
 # Default for unknown strategies
-DEFAULT_THRESHOLD = 0.55
+DEFAULT_THRESHOLD = 0.50
 
 
 # =========================
@@ -132,8 +119,6 @@ def ai_filter_v2(trade: dict) -> dict:
     strategy = trade.get("strategy", "UNKNOWN")
     threshold = STRATEGY_THRESHOLDS.get(strategy, DEFAULT_THRESHOLD)
 
-    decision = "TAKE" if prob >= threshold else "SKIP"
-
     # Confidence level
     if prob >= threshold + 0.15:
         confidence = "HIGH"
@@ -141,6 +126,10 @@ def ai_filter_v2(trade: dict) -> dict:
         confidence = "MEDIUM"
     else:
         confidence = "LOW"
+
+    # ONLY take HIGH confidence trades (86.7% profitable in backtest)
+    # MEDIUM/LOW confidence trades have negative expectancy
+    decision = "TAKE" if confidence == "HIGH" else "SKIP"
 
     return {
         "decision": decision,

@@ -83,9 +83,10 @@ def update_live_exits(df):
             continue
 
         # =========================
-        # BREAKEVEN MOVE (> 1x ATR profit)
+        # BREAKEVEN MOVE (> 0.8x SL distance in profit)
         # =========================
-        if move > atr and not trade.get("breakeven"):
+        sl_dist = abs(entry - trade["original_sl"])
+        if sl_dist > 0 and move > 0.8 * sl_dist and not trade.get("breakeven"):
             if trade_type == "BUY":
                 new_sl = max(sl, entry + 2)  # Small buffer above entry
             else:
@@ -97,17 +98,18 @@ def update_live_exits(df):
                 print(f"  TRAIL: {trade['strategy']} {trade_type} SL moved to BREAKEVEN ({new_sl:.0f})")
 
         # =========================
-        # TRAILING STOP (> 2x ATR profit)
+        # TRAILING STOP (> 1.2x SL distance in profit)
         # =========================
-        if move > atr * 2:
+        if sl_dist > 0 and move > 1.2 * sl_dist:
+            move_r = move / sl_dist
             if trade_type == "BUY":
-                new_sl = last_price - atr
+                new_sl = entry + (move_r - 0.6) * sl_dist
                 if new_sl > trade["stoploss"]:
                     trade["stoploss"] = new_sl
                     trade["trailed"] = True
                     print(f"  TRAIL: {trade['strategy']} {trade_type} SL trailed to {new_sl:.0f}")
             else:
-                new_sl = last_price + atr
+                new_sl = entry - (move_r - 0.6) * sl_dist
                 if new_sl < trade["stoploss"]:
                     trade["stoploss"] = new_sl
                     trade["trailed"] = True

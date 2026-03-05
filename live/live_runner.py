@@ -113,10 +113,10 @@ market_regime = "RANGE"
 # =========================
 strategies = [
     ORBStrategy(rr=2.0),
-    EMAScalpStrategy(rr=1.5),
-    VWAPReversionStrategy(rr=1.5),
+    EMAScalpStrategy(rr=2.0),
+    VWAPReversionStrategy(rr=2.0),
     MomentumSurgeStrategy(rr=2.0),
-    PivotScalpStrategy(rr=1.5),
+    PivotScalpStrategy(rr=2.0),
 ]
 
 

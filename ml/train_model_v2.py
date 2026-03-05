@@ -167,7 +167,7 @@ for strat_name, strat_code in STRATEGY_MAP.items():
         continue
     subset = test_df[mask]
     actual_wr = subset["actual"].mean() * 100
-    rr_val = 1.5 if strat_name in ["EMA_SCALP", "VWAP_REVERSION", "PIVOT_SCALP"] else 2.0
+    rr_val = 2.0  # All strategies use 1:2 RR in V3
 
     best_threshold = 0.55
     best_pnl = -999
