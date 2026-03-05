@@ -1,19 +1,13 @@
 """
 VWAP Mean Reversion Strategy
 ==============================
-Trades reversions back to VWAP when price deviates too far.
+Trades reversions back to VWAP when price deviates significantly.
 
 Logic:
-- BUY: Price drops below VWAP - 0.5*ATR, then shows bullish reversal candle
-- SELL: Price rises above VWAP + 0.5*ATR, then shows bearish reversal candle
-- SL: Beyond the deviation extreme (VWAP ± 1.5*ATR)
-- Target: Back toward VWAP
-
-Why it works in messy markets:
-- Messy markets = mean-reverting price action around VWAP
-- Institutions use VWAP for execution, price always reverts
-- This is THE strategy for choppy institutional flow
-- Low RR = quick hits as price snaps back to VWAP
+- BUY: Price drops below VWAP - 0.7*ATR, then shows strong bullish reversal
+- SELL: Price rises above VWAP + 0.7*ATR, then shows strong bearish reversal
+- SL: Minimum 1.0 ATR from entry
+- Target: Back toward VWAP (RR 1.5)
 """
 
 import pandas as pd
@@ -21,7 +15,7 @@ from ml.features import extract_features
 
 
 class VWAPReversionStrategy:
-    def __init__(self, rr=1.5, max_trades_per_day=4):
+    def __init__(self, rr=1.5, max_trades_per_day=3):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -50,69 +44,83 @@ class VWAPReversionStrategy:
             vwap = curr["vwap"]
             close = curr["close"]
 
-            # ===== BUY: Price dropped below VWAP, reverting up =====
+            # ANTI-CHOP FILTER: if price is whipsawing around VWAP (tiny deviations),
+            # the "reversion" isn't real — it's just noise
+            range_vs_avg = curr.get("range_vs_avg", 1.0)
+
+            # ===== BUY: Price dropped well below VWAP, reverting up =====
             deviation_down = vwap - close
             if (
-                deviation_down > 0.4 * atr  # Price is below VWAP by at least 0.4 ATR
-                and close > curr["open"]  # Current candle is bullish (reversal)
-                and curr["body_ratio"] > 0.35  # Has decent body
-                and prev["close"] < vwap  # Prev also below VWAP (confirmed deviation)
+                deviation_down > 0.7 * atr   # Significant deviation
+                and close > curr["open"]       # Bullish reversal candle
+                and curr["body_ratio"] > 0.45  # Strong body
+                and prev["close"] < vwap       # Prev also below VWAP
+                and curr["rsi_14"] < 45        # Actually oversold
+                and range_vs_avg > 0.8         # Reversal candle has some substance
             ):
                 entry = close
-                # SL below the swing low, but capped at 1.2 ATR
-                sl = min(curr["low"], prev["low"]) - 3
+                sl = min(curr["low"], prev["low"]) - 0.1 * atr
                 sl_dist = entry - sl
 
-                if sl_dist <= 0 or sl_dist > 1.2 * atr:
-                    sl = entry - 0.8 * atr  # Cap SL
+                # Enforce minimum 1.0 ATR SL
+                if sl_dist < 1.0 * atr:
+                    sl = entry - 1.0 * atr
                     sl_dist = entry - sl
 
-                if sl_dist > 0.2 * atr:  # Minimum SL distance
-                    target = entry + sl_dist * self.rr
-                    features = extract_features(curr, "VWAP_REVERSION", entry, sl, self.rr)
+                # Cap at 2.0 ATR max
+                if sl_dist > 2.0 * atr:
+                    continue
 
-                    trades.append({
-                        "strategy": "VWAP_REVERSION",
-                        "type": "BUY",
-                        "entry": round(entry, 2),
-                        "stoploss": round(sl, 2),
-                        "target": round(target, 2),
-                        "rr": self.rr,
-                        "time": curr["datetime"],
-                        "features": features,
-                    })
-                    trades_per_day[date] += 1
+                target = entry + sl_dist * self.rr
+                features = extract_features(curr, "VWAP_REVERSION", entry, sl, self.rr)
 
-            # ===== SELL: Price rose above VWAP, reverting down =====
+                trades.append({
+                    "strategy": "VWAP_REVERSION",
+                    "type": "BUY",
+                    "entry": round(entry, 2),
+                    "stoploss": round(sl, 2),
+                    "target": round(target, 2),
+                    "rr": self.rr,
+                    "time": curr["datetime"],
+                    "features": features,
+                })
+                trades_per_day[date] += 1
+
+            # ===== SELL: Price rose well above VWAP, reverting down =====
             deviation_up = close - vwap
             if (
-                deviation_up > 0.4 * atr
-                and close < curr["open"]  # Bearish candle (reversal)
-                and curr["body_ratio"] > 0.35
-                and prev["close"] > vwap
+                deviation_up > 0.7 * atr      # Significant deviation
+                and close < curr["open"]        # Bearish reversal candle
+                and curr["body_ratio"] > 0.45   # Strong body
+                and prev["close"] > vwap        # Prev also above VWAP
+                and curr["rsi_14"] > 55         # Actually overbought
+                and range_vs_avg > 0.8          # Reversal candle has some substance
             ):
                 entry = close
-                sl = max(curr["high"], prev["high"]) + 3
+                sl = max(curr["high"], prev["high"]) + 0.1 * atr
                 sl_dist = sl - entry
 
-                if sl_dist <= 0 or sl_dist > 1.2 * atr:
-                    sl = entry + 0.8 * atr
+                # Enforce minimum 1.0 ATR SL
+                if sl_dist < 1.0 * atr:
+                    sl = entry + 1.0 * atr
                     sl_dist = sl - entry
 
-                if sl_dist > 0.2 * atr:
-                    target = entry - sl_dist * self.rr
-                    features = extract_features(curr, "VWAP_REVERSION", entry, sl, self.rr)
+                if sl_dist > 2.0 * atr:
+                    continue
 
-                    trades.append({
-                        "strategy": "VWAP_REVERSION",
-                        "type": "SELL",
-                        "entry": round(entry, 2),
-                        "stoploss": round(sl, 2),
-                        "target": round(target, 2),
-                        "rr": self.rr,
-                        "time": curr["datetime"],
-                        "features": features,
-                    })
-                    trades_per_day[date] += 1
+                target = entry - sl_dist * self.rr
+                features = extract_features(curr, "VWAP_REVERSION", entry, sl, self.rr)
+
+                trades.append({
+                    "strategy": "VWAP_REVERSION",
+                    "type": "SELL",
+                    "entry": round(entry, 2),
+                    "stoploss": round(sl, 2),
+                    "target": round(target, 2),
+                    "rr": self.rr,
+                    "time": curr["datetime"],
+                    "features": features,
+                })
+                trades_per_day[date] += 1
 
         return trades

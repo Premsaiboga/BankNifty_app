@@ -2,7 +2,7 @@
 End-to-End Test
 ================
 Simulates realistic trade signals through the full pipeline:
-  Strategy Signal → AI Filter → Telegram Alert (BankNifty index levels)
+  Strategy Signal -> Brain Filters -> AI Filter -> Telegram Alert
 
 No live data needed — uses mock candle data based on recent BankNifty levels.
 """
@@ -67,6 +67,9 @@ buy_trade = {
         "atr": 48.0,
         "rr": 2.0,
         "sl_distance_norm": 1.04,
+        "consolidation_ratio": 1.8,
+        "ema_spread": 0.3,
+        "range_vs_avg": 1.2,
     },
 }
 
@@ -119,6 +122,9 @@ sell_trade = {
         "atr": 52.0,
         "rr": 1.5,
         "sl_distance_norm": 0.96,
+        "consolidation_ratio": 2.1,
+        "ema_spread": -0.4,
+        "range_vs_avg": 1.1,
     },
 }
 
@@ -171,6 +177,9 @@ momentum_trade = {
         "atr": 55.0,
         "rr": 2.0,
         "sl_distance_norm": 1.09,
+        "consolidation_ratio": 2.5,
+        "ema_spread": 0.6,
+        "range_vs_avg": 1.8,
     },
 }
 

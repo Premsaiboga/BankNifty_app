@@ -4,17 +4,11 @@ Momentum Surge Strategy
 Catches strong institutional candles and trades the continuation.
 
 Logic:
-- Detect a SURGE candle: body > 60% of range, range > 0.8*ATR
-- BUY: Bullish surge + RSI > 52 + candle close above VWAP
-- SELL: Bearish surge + RSI < 48 + candle close below VWAP
-- SL: Opposite end of the surge candle
-- Target: Continuation move
-
-Why it works in messy markets:
-- Even in chop, institutions create sudden surges
-- These surges have follow-through in the next 2-3 candles
-- Large candles = institutional order flow, not retail noise
-- Riding the surge gets quick profits before the next chop starts
+- Detect a SURGE candle: body > 62% of range, range > 0.9*ATR
+- BUY: Bullish surge + RSI > 55 + above VWAP
+- SELL: Bearish surge + RSI < 45 + below VWAP
+- SL: Beyond surge candle extreme (minimum 1.0 ATR)
+- Target: Continuation at RR 2.0
 """
 
 import pandas as pd
@@ -22,7 +16,7 @@ from ml.features import extract_features
 
 
 class MomentumSurgeStrategy:
-    def __init__(self, rr=2.0, max_trades_per_day=3):
+    def __init__(self, rr=2.0, max_trades_per_day=2):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -49,10 +43,19 @@ class MomentumSurgeStrategy:
             atr = curr["atr"]
             candle_range = curr["candle_range"]
 
-            # ===== Surge Detection =====
+            # FAKE BREAKOUT FILTERS
+            consolidation = curr.get("consolidation_ratio", 2.0)
+            range_vs_avg = curr.get("range_vs_avg", 1.0)
+
+            # Skip if market is consolidating (surges in chop are fake)
+            if consolidation < 1.3:
+                continue
+
+            # ===== Surge Detection (TIGHTENED + range_vs_avg) =====
             is_surge = (
-                curr["body_ratio"] > 0.55  # Strong body (relaxed from 0.6)
-                and candle_range > 0.7 * atr  # Large candle (relaxed from 0.8)
+                curr["body_ratio"] > 0.62      # Strong institutional body
+                and candle_range > 0.9 * atr    # Large candle
+                and range_vs_avg > 1.5          # MUST be 1.5x bigger than recent candles
             )
 
             if not is_surge:
@@ -60,15 +63,20 @@ class MomentumSurgeStrategy:
 
             # ===== BULLISH SURGE (BUY) =====
             if (
-                curr["close"] > curr["open"]  # Bullish
-                and curr["rsi_14"] > 50
-                and curr["close"] > curr.get("vwap", curr["close"])  # Above VWAP
+                curr["close"] > curr["open"]   # Bullish
+                and curr["rsi_14"] > 55         # Strong momentum (was 50)
+                and curr["close"] > curr.get("vwap", curr["close"])
             ):
                 entry = curr["close"]
-                sl = curr["low"] - 3  # SL at candle low with buffer
-
+                sl = curr["low"] - 0.1 * atr   # ATR-scaled buffer (was -3)
                 sl_dist = entry - sl
-                if sl_dist <= 0 or sl_dist > 2.0 * atr:
+
+                # Enforce minimum 1.0 ATR SL
+                if sl_dist < 1.0 * atr:
+                    sl = entry - 1.0 * atr
+                    sl_dist = entry - sl
+
+                if sl_dist > 2.5 * atr:
                     continue
 
                 target = entry + sl_dist * self.rr
@@ -88,15 +96,20 @@ class MomentumSurgeStrategy:
 
             # ===== BEARISH SURGE (SELL) =====
             elif (
-                curr["close"] < curr["open"]  # Bearish
-                and curr["rsi_14"] < 50
-                and curr["close"] < curr.get("vwap", curr["close"])  # Below VWAP
+                curr["close"] < curr["open"]   # Bearish
+                and curr["rsi_14"] < 45         # Strong weakness (was 50)
+                and curr["close"] < curr.get("vwap", curr["close"])
             ):
                 entry = curr["close"]
-                sl = curr["high"] + 3
-
+                sl = curr["high"] + 0.1 * atr   # ATR-scaled buffer (was +3)
                 sl_dist = sl - entry
-                if sl_dist <= 0 or sl_dist > 2.0 * atr:
+
+                # Enforce minimum 1.0 ATR SL
+                if sl_dist < 1.0 * atr:
+                    sl = entry + 1.0 * atr
+                    sl_dist = sl - entry
+
+                if sl_dist > 2.5 * atr:
                     continue
 
                 target = entry - sl_dist * self.rr

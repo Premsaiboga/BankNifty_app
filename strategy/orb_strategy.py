@@ -5,15 +5,10 @@ Captures the first institutional move of the day.
 
 Logic:
 - First 15 min (3 x 5-min candles) defines the Opening Range (OR)
-- BUY: Close breaks above OR high with bullish candle
-- SELL: Close breaks below OR low with bearish candle
-- SL: Midpoint of OR (tighter) or opposite side (wider)
+- BUY: Close breaks above OR high with bullish candle + RSI confirmation
+- SELL: Close breaks below OR low with bearish candle + RSI confirmation
+- SL: Midpoint of OR (minimum 1.0 ATR)
 - Only 1 trade per direction per day
-
-Why it works in messy markets:
-- Institutions accumulate in the first 15 min, then push direction
-- ORB captures this momentum regardless of overall market choppiness
-- Works on 70%+ of trading days
 """
 
 import pandas as pd
@@ -32,7 +27,6 @@ class ORBStrategy:
         for date, group in df.groupby("date"):
             trades_per_day.setdefault(date, {"BUY": 0, "SELL": 0})
 
-            # Need at least 3 candles for ORB + some candles to trade
             if len(group) < 5:
                 continue
 
@@ -41,11 +35,10 @@ class ORBStrategy:
             orb_mid = (orb_high + orb_low) / 2
             orb_range = orb_high - orb_low
 
-            # Skip if ORB range is too tight (< 30 points) or too wide (> 300 points)
-            if orb_range < 30 or orb_range > 300:
+            # Skip if ORB range is too tight (< 40) or too wide (> 250)
+            if orb_range < 40 or orb_range > 250:
                 continue
 
-            # Start scanning from candle 4 onwards (after ORB forms)
             for idx in range(3, len(group)):
                 row = group.iloc[idx]
 
@@ -55,22 +48,42 @@ class ORBStrategy:
 
                 if pd.isna(row.get("atr")) or row["atr"] < 1:
                     continue
+                if pd.isna(row.get("rsi_14")):
+                    continue
+
+                atr = row["atr"]
+
+                # FAKE BREAKOUT FILTERS
+                consolidation = row.get("consolidation_ratio", 2.0)
+                range_vs_avg = row.get("range_vs_avg", 1.0)
+
+                # Skip if market is consolidating (tight range = fake breakouts)
+                if consolidation < 1.2:
+                    continue
 
                 # ===== BUY: Break above ORB High =====
                 if (
                     trades_per_day[date]["BUY"] < 1
-                    and row["close"] > orb_high
-                    and row["close"] > row["open"]  # Bullish candle
-                    and row["body_ratio"] > 0.4  # Decent body
+                    and row["close"] > orb_high + 0.3 * atr  # DECISIVE break (not barely above)
+                    and row["close"] > row["open"]      # Bullish candle
+                    and row["body_ratio"] > 0.50         # Strong body
+                    and row["rsi_14"] > 55               # RSI confirms momentum
+                    and row["close"] > row.get("vwap", row["close"])  # Above VWAP
+                    and range_vs_avg > 1.2               # Breakout candle bigger than recent avg
                 ):
                     entry = row["close"]
-                    # Tighter SL: midpoint of ORB or candle low, whichever is closer
                     sl = max(orb_mid, row["low"])
                     if entry <= sl:
-                        sl = entry - orb_range * 0.3  # Fallback: 30% of ORB range
+                        sl = entry - orb_range * 0.3
 
-                    if entry > sl:
-                        target = entry + (entry - sl) * self.rr
+                    # Enforce minimum SL of 1.0 ATR
+                    sl_dist = entry - sl
+                    if sl_dist < 1.0 * atr:
+                        sl = entry - 1.0 * atr
+                    sl_dist = entry - sl
+
+                    if sl_dist > 0 and sl_dist <= 3.0 * atr:
+                        target = entry + sl_dist * self.rr
                         features = extract_features(row, "ORB", entry, sl, self.rr)
 
                         trades.append({
@@ -88,17 +101,26 @@ class ORBStrategy:
                 # ===== SELL: Break below ORB Low =====
                 if (
                     trades_per_day[date]["SELL"] < 1
-                    and row["close"] < orb_low
-                    and row["close"] < row["open"]  # Bearish candle
-                    and row["body_ratio"] > 0.4
+                    and row["close"] < orb_low - 0.3 * atr  # DECISIVE break (not barely below)
+                    and row["close"] < row["open"]       # Bearish candle
+                    and row["body_ratio"] > 0.50          # Strong body
+                    and row["rsi_14"] < 45                # RSI confirms weakness
+                    and row["close"] < row.get("vwap", row["close"])  # Below VWAP
+                    and range_vs_avg > 1.2               # Breakout candle bigger than recent avg
                 ):
                     entry = row["close"]
                     sl = min(orb_mid, row["high"])
                     if entry >= sl:
                         sl = entry + orb_range * 0.3
 
-                    if entry < sl:
-                        target = entry - (sl - entry) * self.rr
+                    # Enforce minimum SL of 1.0 ATR
+                    sl_dist = sl - entry
+                    if sl_dist < 1.0 * atr:
+                        sl = entry + 1.0 * atr
+                    sl_dist = sl - entry
+
+                    if sl_dist > 0 and sl_dist <= 3.0 * atr:
+                        target = entry - sl_dist * self.rr
                         features = extract_features(row, "ORB", entry, sl, self.rr)
 
                         trades.append({

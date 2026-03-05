@@ -1,6 +1,7 @@
 """
 Feature extraction for ML model.
-Extracts 22 features from a DataFrame row (candle with indicators).
+Extracts 25 features from a DataFrame row (candle with indicators).
+Includes fake breakout detection features (consolidation, chop, EMA spread).
 """
 
 # Feature list used by the ML model - ORDER MATTERS
@@ -27,6 +28,10 @@ FEATURE_COLUMNS = [
     "atr",
     "rr",
     "sl_distance_norm",
+    # === NEW: Fake breakout detection features ===
+    "consolidation_ratio",  # Low = tight range = fake breakouts
+    "ema_spread",           # Near 0 = no trend = breakout fails
+    "range_vs_avg",         # < 1.0 = candle is weak = noise breakout
 ]
 
 STRATEGY_MAP = {
@@ -45,7 +50,7 @@ STRATEGY_MAP = {
 def extract_features(row, strategy: str, entry: float, stoploss: float, rr: float) -> dict:
     """
     Extract ML features from a DataFrame row.
-    Returns a dict with all FEATURE_COLUMNS.
+    Returns a dict with all FEATURE_COLUMNS (25 features).
     """
     atr_safe = max(row.get("atr", 1.0), 0.01)
     sl_distance = abs(entry - stoploss)
@@ -73,4 +78,8 @@ def extract_features(row, strategy: str, entry: float, stoploss: float, rr: floa
         "atr": atr_safe,
         "rr": rr,
         "sl_distance_norm": sl_distance / atr_safe,
+        # Fake breakout detection
+        "consolidation_ratio": row.get("consolidation_ratio", 1.5),
+        "ema_spread": row.get("ema_spread", 0.0),
+        "range_vs_avg": row.get("range_vs_avg", 1.0),
     }

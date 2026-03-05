@@ -26,6 +26,7 @@ from ml.features import FEATURE_COLUMNS
 # =========================
 DATA_PATH = PROJECT_ROOT / "data/historical/banknifty_5m.csv"
 OUTPUT_PATH = PROJECT_ROOT / "ml/training_data_v2.csv"
+SLIPPAGE_POINTS = 5  # Realistic slippage per trade (BankNifty points)
 
 # =========================
 # LOAD DATA
@@ -60,6 +61,14 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
     target = trade["target"]
     trade_type = trade["type"]
     entry_time = trade["time"]
+
+    # Apply slippage: worse entry price
+    if trade_type == "BUY":
+        entry += SLIPPAGE_POINTS
+        target += SLIPPAGE_POINTS
+    else:
+        entry -= SLIPPAGE_POINTS
+        target -= SLIPPAGE_POINTS
 
     idx_list = df.index[df["datetime"] == entry_time].tolist()
     if not idx_list:

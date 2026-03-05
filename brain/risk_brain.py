@@ -18,10 +18,10 @@ def adjust_targets(trade, df_5m):
 
     if trade["type"] == "BUY":
         trade["target"] = entry + max_move
-        trade["sl"] = entry - current_atr
+        trade["stoploss"] = entry - current_atr
     else:
         trade["target"] = entry - max_move
-        trade["sl"] = entry + current_atr
+        trade["stoploss"] = entry + current_atr
 
     return trade
 

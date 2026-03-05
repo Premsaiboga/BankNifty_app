@@ -28,6 +28,7 @@ DATA_PATH = PROJECT_ROOT / "data/historical/banknifty_5m.csv"
 CAPITAL = 10000  # Starting capital
 RISK_PER_TRADE = 750  # Max risk per trade in Rs (option premium SL)
 LOT_SIZE = 15
+SLIPPAGE_POINTS = 5   # Realistic slippage per trade (BankNifty points)
 
 # =========================
 # LOAD DATA
@@ -55,6 +56,14 @@ def evaluate_trade(df, trade, max_candles=60):
     trade_type = trade["type"]
     entry_time = trade["time"]
     rr = trade["rr"]
+
+    # Apply slippage: worse entry price
+    if trade_type == "BUY":
+        entry += SLIPPAGE_POINTS
+        target += SLIPPAGE_POINTS
+    else:
+        entry -= SLIPPAGE_POINTS
+        target -= SLIPPAGE_POINTS
 
     idx_list = df.index[df["datetime"] == entry_time].tolist()
     if not idx_list:

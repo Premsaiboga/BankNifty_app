@@ -1,10 +1,14 @@
 """
-Live Runner V2
-===============
-WebSocket tick receiver -> 1m/5m candle builder -> V2 multi-strategy engine.
+Live Runner V2 — Production-Grade
+====================================
+WebSocket tick receiver -> 1m/5m candle builder -> brain filters -> V2 strategies -> AI -> Telegram.
 
-Replaces V1 first_pullback_strategy with 5 V2 strategies:
-  ORB, EMA_SCALP, VWAP_REVERSION, MOMENTUM_SURGE, PIVOT_SCALP
+Integrates all brain modules:
+  - market_brain: 15-min bias (BUY/SELL/NEUTRAL) + regime (TREND/RANGE)
+  - strategy_brain: blocks counter-trend trades, regime-incompatible strategies
+  - liquidity_engine: blocks trades during stop hunts / equal highs/lows
+  - risk_brain: blocks exhausted moves
+  - live_exit_manager: trailing stops, breakeven, exit alerts
 
 Usage (Oracle VM):
   nohup python3 -u -m live.live_runner > live/live.log 2>&1 &
@@ -47,6 +51,13 @@ from strategy.pivot_scalp_strategy import PivotScalpStrategy
 from live.live_engine_v2 import process_trade_v2
 from live.telegram_alert import send_telegram_alert
 
+# Brain modules
+from brain.market_brain import detect_bias, detect_regime
+from brain.strategy_brain import allow_trade
+from brain.liquidity_engine import liquidity_block
+from brain.risk_brain import reversal_warning
+from brain.live_exit_manager import register_trade, update_live_exits, active_trades
+
 
 # =========================
 # ENV
@@ -64,7 +75,6 @@ instrument_tokens = [260105]
 # =========================
 # Oracle VMs default to UTC. KiteTicker uses datetime.fromtimestamp()
 # which returns LOCAL time. On UTC server, timestamps are UTC not IST.
-# We must convert to IST for indicator calculations (minutes_from_open).
 IST_OFFSET = timedelta(hours=5, minutes=30)
 SERVER_IS_UTC = abs(_tz_offset) < 3600
 
@@ -74,17 +84,28 @@ def to_ist(ts):
         return ts + IST_OFFSET
     return ts
 
+def now_ist():
+    """Get current time in IST regardless of server timezone."""
+    return to_ist(datetime.now())
+
 
 # =========================
 # GLOBAL STATE
 # =========================
 ticks_buffer = []
+ticks_lock = threading.Lock()  # Thread safety for tick buffer
 current_minute = None
 
 candles_1m = deque(maxlen=200)
 candles_5m_raw = []        # Accumulated 5m candle dicts for DataFrame
+candles_15m_raw = []       # 15m candles for market_brain
+candles_5m_for_15m = []    # Buffer to aggregate 5m -> 15m
 signaled_trades = set()    # Avoid duplicate alerts
 current_date = None        # Track date for daily reset
+
+# Market state (updated from brain modules)
+market_bias = "NEUTRAL"
+market_regime = "RANGE"
 
 
 # =========================
@@ -116,25 +137,33 @@ def get_tick_time(tick):
 
 
 # =========================
-# BUILD 1M CANDLE
+# BUILD 1M CANDLE (with volume)
 # =========================
 def build_1m_candle(ticks):
     clean_ticks = []
     for t in ticks:
         ts = get_tick_time(t)
         if ts:
-            clean_ticks.append({"time": ts, "price": t["last_price"]})
+            clean_ticks.append({
+                "time": ts,
+                "price": t["last_price"],
+                "volume": t.get("volume_traded", 0) or 0,
+            })
 
     if not clean_ticks:
         return None
 
     df = pd.DataFrame(clean_ticks)
+    # volume_traded is cumulative — take max as snapshot at candle close
+    volume = int(df["volume"].max()) if df["volume"].max() > 0 else 0
+
     return {
         "time": df["time"].iloc[0].replace(second=0, microsecond=0),
         "open": float(df["price"].iloc[0]),
         "high": float(df["price"].max()),
         "low": float(df["price"].min()),
         "close": float(df["price"].iloc[-1]),
+        "volume": volume,
     }
 
 
@@ -148,7 +177,62 @@ def build_5m(last5):
         "high": max(c["high"] for c in last5),
         "low": min(c["low"] for c in last5),
         "close": last5[-1]["close"],
+        "volume": sum(c.get("volume", 0) for c in last5),
     }
+
+
+# =========================
+# BUILD 15M FROM 5M CANDLES (for market_brain)
+# =========================
+def try_build_15m(c5):
+    """Aggregate 5m candles into 15m. Returns True if a new 15m candle was built."""
+    candles_5m_for_15m.append(c5)
+
+    # Build 15m candle every 3 completed 5m candles
+    if len(candles_5m_for_15m) >= 3:
+        ist_time = to_ist(candles_5m_for_15m[-1]["time"])
+        # Trigger on 15-min IST boundaries
+        if ist_time.minute % 15 in (14, 0) or len(candles_5m_for_15m) == 3:
+            last3 = candles_5m_for_15m[-3:]
+            c15 = {
+                "close": last3[-1]["close"],
+                "open": last3[0]["open"],
+                "high": max(c["high"] for c in last3),
+                "low": min(c["low"] for c in last3),
+                "volume": sum(c.get("volume", 0) for c in last3),
+            }
+            candles_15m_raw.append(c15)
+            candles_5m_for_15m.clear()
+            return True
+    return False
+
+
+# =========================
+# UPDATE MARKET BRAIN (bias + regime from 15m data)
+# =========================
+def update_market_brain():
+    """Update market bias and regime from 15m candle data."""
+    global market_bias, market_regime
+
+    if len(candles_15m_raw) < 50:
+        market_bias = "NEUTRAL"
+        market_regime = "RANGE"
+        return
+
+    df_15m = pd.DataFrame(candles_15m_raw)
+
+    # Ensure required columns exist
+    if "volume" not in df_15m.columns:
+        df_15m["volume"] = 0
+
+    try:
+        market_bias, bias_score = detect_bias(df_15m)
+        market_regime = detect_regime(df_15m)
+        print(f"  BRAIN: bias={market_bias}({bias_score}) regime={market_regime}")
+    except Exception as e:
+        print(f"  Brain error: {e}")
+        market_bias = "NEUTRAL"
+        market_regime = "RANGE"
 
 
 # =========================
@@ -157,8 +241,9 @@ def build_5m(last5):
 def check_daily_reset():
     """Reset state at start of new trading day."""
     global current_date, signaled_trades, candles_5m_raw
+    global candles_15m_raw, candles_5m_for_15m, market_bias, market_regime
 
-    today = datetime.now().date()
+    today = now_ist().date()
     if current_date != today:
         if current_date is not None:
             print(f"\n{'='*50}")
@@ -167,16 +252,41 @@ def check_daily_reset():
         current_date = today
         signaled_trades.clear()
         candles_5m_raw.clear()
+        candles_15m_raw.clear()
+        candles_5m_for_15m.clear()
+        market_bias = "NEUTRAL"
+        market_regime = "RANGE"
 
 
 # =========================
-# PROCESS 5M CANDLE THROUGH V2 STRATEGIES
+# LUNCH-TIME CHECK
+# =========================
+def is_lunch_time(ist_time):
+    """Returns True during 12:15-13:30 IST dead zone."""
+    if ist_time.hour == 12 and ist_time.minute >= 15:
+        return True
+    if ist_time.hour == 13 and ist_time.minute <= 30:
+        return True
+    return False
+
+
+# =========================
+# EXPIRY DAY CHECK
+# =========================
+def is_expiry_day(ist_date):
+    """BankNifty weekly expiry is Wednesday (weekday=2)."""
+    return ist_date.weekday() == 2
+
+
+# =========================
+# PROCESS 5M CANDLE THROUGH BRAIN + V2 STRATEGIES
 # =========================
 def process_5m_candle(c5):
-    """Run all V2 strategies on the accumulated 5m candle data."""
+    """Run brain filters + all V2 strategies on accumulated 5m candle data."""
 
     # Convert time to IST for indicators
     ist_time = to_ist(c5["time"])
+    ist_date = ist_time.date()
 
     candles_5m_raw.append({
         "datetime": ist_time,
@@ -184,7 +294,12 @@ def process_5m_candle(c5):
         "high": c5["high"],
         "low": c5["low"],
         "close": c5["close"],
+        "volume": c5.get("volume", 0),
     })
+
+    # Build 15m candle and update brain
+    if try_build_15m(c5):
+        update_market_brain()
 
     n = len(candles_5m_raw)
 
@@ -192,6 +307,14 @@ def process_5m_candle(c5):
     if n < 4:
         print(f"  Warming up: {n} candles (need 4+ to start)")
         return
+
+    # Lunch-time filter
+    if is_lunch_time(ist_time):
+        print(f"  LUNCH BREAK (12:15-13:30 IST) - skipping signals")
+        return
+
+    # Check expiry day
+    expiry_day = is_expiry_day(ist_date)
 
     try:
         # Build DataFrame and compute all indicators
@@ -217,11 +340,31 @@ def process_5m_candle(c5):
         indicators_str += f" | EMA9={ema9:.0f}" if not pd.isna(ema9) else " | EMA9=N/A"
         indicators_str += f" | EMA21={ema21:.0f}" if not pd.isna(ema21) else " | EMA21=N/A"
         indicators_str += f" | MinsOpen={mfo:.0f}" if not pd.isna(mfo) else " | MinsOpen=N/A"
+        indicators_str += f" | BIAS={market_bias} | REGIME={market_regime}"
+        if expiry_day:
+            indicators_str += " | EXPIRY DAY"
         print(indicators_str)
 
         if pd.isna(atr):
             print(f"  Waiting for ATR warmup ({n}/15 candles)")
             return
+
+        # Check exit manager for active trades
+        if active_trades:
+            try:
+                update_live_exits(df)
+            except Exception as e:
+                print(f"  Exit manager error: {e}")
+
+        # Check for move exhaustion (risk_brain)
+        exhaustion = False
+        if len(df) >= 5:
+            try:
+                exhaustion = reversal_warning(df)
+                if exhaustion:
+                    print(f"  EXHAUSTION WARNING: 5-candle momentum < 10pts")
+            except Exception:
+                pass
 
         # Run all 5 strategies
         signals_found = 0
@@ -244,12 +387,40 @@ def process_5m_candle(c5):
                                   f"TGT={trade['target']:.0f} | "
                                   f"RR=1:{trade['rr']}")
 
-                            # Process through V2 engine (AI filter + option calc + telegram)
+                            # === BRAIN FILTER 1: Strategy permission ===
+                            if not allow_trade(trade, market_bias, market_regime):
+                                print(f"    -> BLOCKED by strategy_brain "
+                                      f"(bias={market_bias}, regime={market_regime})")
+                                continue
+
+                            # === BRAIN FILTER 2: Liquidity / stop hunt ===
+                            try:
+                                if liquidity_block(trade, df):
+                                    print(f"    -> BLOCKED by liquidity_engine (stop hunt risk)")
+                                    continue
+                            except Exception:
+                                pass  # Don't block trades if liquidity check fails
+
+                            # === BRAIN FILTER 3: Exhaustion ===
+                            if exhaustion:
+                                print(f"    -> BLOCKED by risk_brain (move exhaustion)")
+                                continue
+
+                            # === Mark expiry day ===
+                            if expiry_day:
+                                trade["is_expiry"] = True
+
+                            # Process through V2 engine (AI filter + telegram)
                             result = process_trade_v2(trade)
                             if result is None:
                                 print(f"    -> Filtered out by AI or daily limit")
                             else:
                                 print(f"    -> ALERT SENT!")
+                                # Register with exit manager
+                                try:
+                                    register_trade(result)
+                                except Exception as e:
+                                    print(f"    -> Exit manager register error: {e}")
 
             except Exception as e:
                 print(f"  {strategy.__class__.__name__} error: {e}")
@@ -263,55 +434,75 @@ def process_5m_candle(c5):
 
 
 # =========================
-# CANDLE ENGINE
+# CANDLE ENGINE (thread-safe)
 # =========================
 def candle_engine():
-    global ticks_buffer, current_minute
+    global current_minute
 
     while True:
         try:
-            if not ticks_buffer:
+            snapshot = None
+
+            with ticks_lock:
+                if not ticks_buffer:
+                    pass  # Will sleep below
+                else:
+                    last_time = get_tick_time(ticks_buffer[-1])
+                    if last_time is None:
+                        ticks_buffer.clear()
+                        time.sleep(0.2)
+                        continue
+
+                    minute = last_time.replace(second=0, microsecond=0)
+
+                    if current_minute is None:
+                        current_minute = minute
+
+                    if minute > current_minute:
+                        # Take snapshot of ticks and clear buffer
+                        snapshot = list(ticks_buffer)
+                        ticks_buffer.clear()
+                        current_minute = minute
+
+            # Process outside lock
+            if snapshot is None:
                 time.sleep(0.5)
                 continue
 
-            last_time = get_tick_time(ticks_buffer[-1])
-            if last_time is None:
-                time.sleep(0.2)
-                continue
+            c1 = build_1m_candle(snapshot)
 
-            minute = last_time.replace(second=0, microsecond=0)
+            if c1:
+                candles_1m.append(c1)
 
-            if current_minute is None:
-                current_minute = minute
+            if len(candles_1m) >= 5:
+                last5 = list(candles_1m)[-5:]
+                last_ist = to_ist(last5[-1]["time"])
 
-            if minute > current_minute:
+                # Check if we're at a 5-minute IST boundary
+                # 5m candle closes at :04, :09, :14, :19, etc. (0-indexed from :00)
+                if (last_ist.minute + 1) % 5 == 0:
+                    # Validate consecutive minutes (allow tolerance for slight delays)
+                    times = [c["time"] for c in last5]
+                    gaps = [(times[i+1] - times[i]).total_seconds() for i in range(4)]
+                    consecutive = all(30 <= g <= 150 for g in gaps)
 
-                c1 = build_1m_candle(ticks_buffer)
-
-                if c1:
-                    candles_1m.append(c1)
-
-                if len(candles_1m) >= 5:
-
-                    last5 = list(candles_1m)[-5:]
-
-                    if last5[-1]["time"].minute % 5 == 0:
-
+                    if consecutive:
                         c5 = build_5m(last5)
 
                         ist = to_ist(c5["time"])
                         print(f"\n5M CLOSED: O={c5['open']:.0f} H={c5['high']:.0f} "
                               f"L={c5['low']:.0f} C={c5['close']:.0f} "
+                              f"V={c5.get('volume', 0)} "
                               f"@ {ist.strftime('%H:%M')} IST")
 
                         # Check for daily reset
                         check_daily_reset()
 
-                        # Process through V2 strategies
+                        # Process through brain + V2 strategies
                         process_5m_candle(c5)
-
-                ticks_buffer.clear()
-                current_minute = minute
+                    else:
+                        gap_str = [f"{g:.0f}s" for g in gaps]
+                        print(f"  WARN: Non-consecutive 1m candles ({gap_str}), skipping 5m build")
 
             time.sleep(0.5)
 
@@ -335,6 +526,7 @@ def on_connect(ws, response):
     print(f"Server timezone: {tz}")
     strat_names = [s.__class__.__name__ for s in strategies]
     print(f"Strategies active: {', '.join(strat_names)}")
+    print(f"Brain modules: market_brain, strategy_brain, liquidity_engine, risk_brain, exit_manager")
 
 
 def on_close(ws, code, reason):
@@ -346,9 +538,10 @@ def on_error(ws, code, reason):
 
 
 def on_ticks(ws, ticks):
-    for t in ticks:
-        if "last_price" in t:
-            ticks_buffer.append(t)
+    with ticks_lock:
+        for t in ticks:
+            if "last_price" in t:
+                ticks_buffer.append(t)
 
 
 kws.on_connect = on_connect
@@ -361,10 +554,11 @@ kws.on_error = on_error
 # START
 # =========================
 print("=" * 50)
-print("BankNifty Live Runner V2")
+print("BankNifty Live Runner V2 — Production")
 print(f"Strategies: ORB, EMA_SCALP, VWAP_REVERSION, MOMENTUM_SURGE, PIVOT_SCALP")
+print(f"Brain: bias + regime + liquidity + risk + exits")
 print(f"Server UTC: {SERVER_IS_UTC}")
-print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print(f"Started: {now_ist().strftime('%Y-%m-%d %H:%M:%S')} IST")
 print("=" * 50)
 
 threading.Thread(target=candle_engine, daemon=True).start()

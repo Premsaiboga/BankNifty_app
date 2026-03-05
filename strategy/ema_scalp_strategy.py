@@ -1,19 +1,13 @@
 """
 EMA Crossover Scalp Strategy
 =============================
-Quick momentum trades on EMA crossovers with RSI confirmation.
+Momentum trades on EMA crossovers with strong RSI confirmation.
 
 Logic:
-- BUY: 9 EMA crosses above 21 EMA + RSI > 50 + close > VWAP
-- SELL: 9 EMA crosses below 21 EMA + RSI < 50 + close < VWAP
-- SL: 21 EMA or recent candle low/high
-- Quick scalp with RR 1.5
-
-Why it works in messy markets:
-- EMA crossovers catch momentum shifts even in chop
-- RSI filter prevents trading in dead zones
-- VWAP adds institutional flow direction
-- Low RR means quick target hits
+- BUY: 9 EMA crosses above 21 EMA + RSI > 55 + close > VWAP + strong candle
+- SELL: 9 EMA crosses below 21 EMA + RSI < 45 + close < VWAP + strong candle
+- SL: Minimum 1.0 ATR from entry
+- RR 1.5
 """
 
 import pandas as pd
@@ -21,7 +15,7 @@ from ml.features import extract_features
 
 
 class EMAScalpStrategy:
-    def __init__(self, rr=1.5, max_trades_per_day=3):
+    def __init__(self, rr=1.5, max_trades_per_day=2):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -38,7 +32,6 @@ class EMAScalpStrategy:
             if trades_per_day[date] >= self.max_trades_per_day:
                 continue
 
-            # Only trade between 9:30 and 14:45
             if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 330:
                 continue
 
@@ -47,24 +40,41 @@ class EMAScalpStrategy:
             if pd.isna(curr.get("rsi_14")):
                 continue
 
+            atr = curr["atr"]
+
+            # FAKE BREAKOUT FILTERS
+            consolidation = curr.get("consolidation_ratio", 2.0)
+            ema_spread_abs = abs(curr.get("ema_spread", 0.0))
+            range_vs_avg = curr.get("range_vs_avg", 1.0)
+
+            # Skip if market is consolidating (EMAs will whipsaw)
+            if consolidation < 1.2:
+                continue
+
             # ===== EMA CROSS UP (BUY) =====
             ema_crossed_up = prev["ema_9"] <= prev["ema_21"] and curr["ema_9"] > curr["ema_21"]
 
             if (
                 ema_crossed_up
-                and curr["rsi_14"] > 48  # Slightly relaxed from 50
+                and curr["rsi_14"] > 55               # Strong momentum
                 and curr["close"] > curr["vwap"]
-                and curr["close"] > curr["open"]  # Bullish candle
+                and curr["close"] > curr["open"]       # Bullish candle
+                and curr["body_ratio"] > 0.45          # Decent body
+                and ema_spread_abs > 0.15              # EMAs actually separating (not noise)
+                and range_vs_avg > 1.0                 # Crossover candle is decent sized
             ):
                 entry = curr["close"]
-                # SL = 21 EMA or candle low, whichever gives tighter SL
-                sl = max(curr["ema_21"], curr["low"]) - 5  # 5-point buffer
-                if entry <= sl:
-                    continue
-
+                # SL = LOWER of (EMA_21, candle_low) - buffer  [FIXED: was max()]
+                sl = min(curr["ema_21"], curr["low"]) - 0.15 * atr
                 sl_dist = entry - sl
-                # Skip if SL too wide (> 1.5 ATR) or too tight (< 0.3 ATR)
-                if sl_dist > 1.5 * curr["atr"] or sl_dist < 0.3 * curr["atr"]:
+
+                # Enforce minimum 1.0 ATR SL
+                if sl_dist < 1.0 * atr:
+                    sl = entry - 1.0 * atr
+                    sl_dist = entry - sl
+
+                # Skip if SL too wide (> 2.5 ATR)
+                if sl_dist > 2.5 * atr:
                     continue
 
                 target = entry + sl_dist * self.rr
@@ -87,17 +97,24 @@ class EMAScalpStrategy:
 
             if (
                 ema_crossed_down
-                and curr["rsi_14"] < 52  # Slightly relaxed
+                and curr["rsi_14"] < 45                # Strong weakness
                 and curr["close"] < curr["vwap"]
-                and curr["close"] < curr["open"]  # Bearish candle
+                and curr["close"] < curr["open"]       # Bearish candle
+                and curr["body_ratio"] > 0.45          # Decent body
+                and ema_spread_abs > 0.15              # EMAs actually separating
+                and range_vs_avg > 1.0                 # Crossover candle is decent sized
             ):
                 entry = curr["close"]
-                sl = min(curr["ema_21"], curr["high"]) + 5
-                if entry >= sl:
-                    continue
-
+                # SL = HIGHER of (EMA_21, candle_high) + buffer  [FIXED: was min()]
+                sl = max(curr["ema_21"], curr["high"]) + 0.15 * atr
                 sl_dist = sl - entry
-                if sl_dist > 1.5 * curr["atr"] or sl_dist < 0.3 * curr["atr"]:
+
+                # Enforce minimum 1.0 ATR SL
+                if sl_dist < 1.0 * atr:
+                    sl = entry + 1.0 * atr
+                    sl_dist = sl - entry
+
+                if sl_dist > 2.5 * atr:
                     continue
 
                 target = entry - sl_dist * self.rr

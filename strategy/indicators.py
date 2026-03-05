@@ -21,14 +21,33 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Minutes from market open (9:15 AM)
     df["minutes_from_open"] = (df["hour"] - 9) * 60 + (df["minute"] - 15)
 
-    # ========== VWAP (Intraday proxy for index) ==========
+    # ========== VWAP (volume-weighted if available, TP average fallback) ==========
     df["tp"] = (df["high"] + df["low"] + df["close"]) / 3
-    df["vwap"] = (
-        df.groupby("date")["tp"]
-        .expanding()
-        .mean()
-        .reset_index(level=0, drop=True)
-    )
+
+    if "volume" in df.columns and df["volume"].sum() > 0:
+        # Real VWAP: cumsum(TP * Volume) / cumsum(Volume)
+        df["tp_vol"] = df["tp"] * df["volume"]
+        df["cum_tp_vol"] = df.groupby("date")["tp_vol"].cumsum()
+        df["cum_vol"] = df.groupby("date")["volume"].cumsum()
+        df["vwap"] = df["cum_tp_vol"] / (df["cum_vol"] + 1e-10)
+        # Fallback for zero-volume rows to TP average
+        zero_vol = df["cum_vol"] == 0
+        if zero_vol.any():
+            df.loc[zero_vol, "vwap"] = (
+                df.loc[zero_vol].groupby("date")["tp"]
+                .expanding()
+                .mean()
+                .reset_index(level=0, drop=True)
+            )
+        df.drop(columns=["tp_vol", "cum_tp_vol", "cum_vol"], inplace=True)
+    else:
+        # No volume data (BankNifty index): use TP average as proxy
+        df["vwap"] = (
+            df.groupby("date")["tp"]
+            .expanding()
+            .mean()
+            .reset_index(level=0, drop=True)
+        )
 
     # ========== ATR (14-period) ==========
     high_low = df["high"] - df["low"]
@@ -134,5 +153,34 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # ========== EMA Cross Signal ==========
     df["ema_cross"] = np.where(df["ema_9"] > df["ema_21"], 1, -1)
     df["ema_cross_change"] = df["ema_cross"].diff().abs()  # 2 means crossover just happened
+
+    # ========== FAKE BREAKOUT DETECTION (added Mar 2026) ==========
+
+    # 1. Consolidation Ratio: range of last 6 candles / ATR
+    #    Low value (<1.2) = tight range = choppy = fake breakouts likely
+    #    High value (>2.0) = trending = real breakouts
+    rolling_high_6 = df["high"].rolling(6).max()
+    rolling_low_6 = df["low"].rolling(6).min()
+    df["consolidation_ratio"] = (rolling_high_6 - rolling_low_6) / (atr_safe + 1e-10)
+
+    # 2. EMA Spread: how far apart are EMAs / ATR
+    #    Near 0 = flat/choppy = no trend = breakout strategies fail
+    #    > 0.5 = trending = EMA crossover is meaningful
+    df["ema_spread"] = (df["ema_9"] - df["ema_21"]) / (atr_safe + 1e-10)
+
+    # 3. Candle vs Recent Average: is this candle exceptional?
+    #    > 1.5 = surge candle stands out = real momentum
+    #    < 1.0 = normal candle = noise breakout
+    avg_range_5 = df["candle_range"].rolling(5).mean()
+    df["range_vs_avg"] = df["candle_range"] / (avg_range_5 + 1e-10)
+
+    # 4. Choppy counter: how many direction changes in last 6 candles
+    #    High value (4+) = choppy = all breakouts are fake
+    direction_changes = df["ema_cross_change"].rolling(6).sum()
+    df["chop_count"] = direction_changes
+
+    # 5. BB squeeze: when BB width is contracting, market is coiling
+    #    Breakouts from squeeze are more reliable than breakouts in open range
+    df["bb_squeeze"] = (df["bb_width"] < df["bb_width"].rolling(20).mean() * 0.8).astype(int)
 
     return df

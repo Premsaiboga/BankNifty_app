@@ -15,11 +15,11 @@ def allow_trade(trade, bias, regime):
     if bias == "SELL" and trade_type == "BUY":
         return False
 
-    # Strategy permission
-    if regime == "TREND" and strategy == "PIVOT":
+    # Strategy-regime permission (V2 strategy names)
+    if regime == "TREND" and strategy in ("PIVOT_SCALP", "PIVOT"):
         return False
 
-    if regime == "RANGE" and strategy == "VWAP":
+    if regime == "RANGE" and strategy in ("VWAP_REVERSION", "VWAP_PULLBACK", "VWAP"):
         return False
 
     return True

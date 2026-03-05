@@ -43,22 +43,24 @@ def _load_model():
 
 
 # =========================
-# STRATEGY THRESHOLDS (LOWERED for messy markets)
+# STRATEGY THRESHOLDS (based on out-of-sample testing)
 # =========================
-# These are intentionally lower than v1 to allow more trades through.
-# The strategies themselves are better designed, so lower thresholds still
-# produce quality trades. The key insight: in messy markets, even a 50-55%
-# win rate with RR 1.5-2.0 is profitable.
+# Higher thresholds = fewer but better trades. Based on honest OOS results:
+# - PIVOT_SCALP: Best strategy (54.8% OOS WR) → moderate threshold
+# - ORB: Positive PnL with RR 2.0 → moderate threshold
+# - EMA_SCALP: Marginal → higher threshold
+# - VWAP_REVERSION: Negative OOS PnL → very high threshold
+# - MOMENTUM_SURGE: Negative OOS PnL → very high threshold
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.45,            # Optimal: 0.44 (high RR compensates)
-    "EMA_SCALP": 0.42,      # Optimal: 0.40
-    "VWAP_REVERSION": 0.42,  # Optimal: 0.40
-    "MOMENTUM_SURGE": 0.44,  # Optimal: 0.44
-    "PIVOT_SCALP": 0.48,    # Optimal: 0.48
+    "ORB": 0.50,              # Decent OOS, high RR compensates
+    "EMA_SCALP": 0.52,        # Marginal OOS, need strong filter
+    "VWAP_REVERSION": 0.58,   # Weak OOS, only take strongest signals
+    "MOMENTUM_SURGE": 0.56,   # Weak OOS, only take strongest signals
+    "PIVOT_SCALP": 0.46,      # Best OOS strategy, let more through
 }
 
 # Default for unknown strategies
-DEFAULT_THRESHOLD = 0.50
+DEFAULT_THRESHOLD = 0.55
 
 
 # =========================

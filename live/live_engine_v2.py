@@ -1,14 +1,14 @@
 """
-Live Engine V2
-===============
-Multi-strategy live trade processor with option premium recommendations.
-Receives trade signals from all 5 strategies, filters through AI,
-calculates option recommendations, and sends Telegram alerts.
+Live Engine V2 — Production-Grade
+====================================
+Multi-strategy live trade processor with brain-powered filtering.
+Receives trade signals, filters through AI, enforces risk limits,
+tracks active trades, and sends Telegram alerts with exit updates.
 """
 
 import sys
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,23 +21,45 @@ from ml.ai_filter_v2 import ai_filter_v2
 from live.telegram_alert import send_telegram_alert
 
 # =========================
+# TIMEZONE
+# =========================
+from time import timezone as _tz_offset
+IST_OFFSET = timedelta(hours=5, minutes=30)
+SERVER_IS_UTC = abs(_tz_offset) < 3600
+
+def _now_ist():
+    now = datetime.now()
+    return now + IST_OFFSET if SERVER_IS_UTC else now
+
+
+# =========================
 # CONFIG
 # =========================
 MAX_TRADES_PER_DAY = 5
-MAX_DAILY_LOSS = 3000  # Stop trading after ₹3000 loss in a day
+MAX_TRADES_EXPIRY = 3          # Fewer trades on expiry day
+MAX_DAILY_LOSS = 3000          # Stop trading after this loss in a day
+
 
 # =========================
 # STATE
 # =========================
-daily_trades = {"date": None, "count": 0, "trades": []}
+daily_trades = {"date": None, "count": 0, "trades": [], "pnl": 0}
+recent_signals = []  # Track correlated signals
 
 
 def reset_daily_state():
-    today = datetime.now().date()
+    today = _now_ist().date()
     if daily_trades["date"] != today:
         daily_trades["date"] = today
         daily_trades["count"] = 0
         daily_trades["trades"] = []
+        daily_trades["pnl"] = 0
+        recent_signals.clear()
+
+
+def record_trade_result(pnl_amount: float):
+    """Called by exit manager when a trade closes. Tracks daily P&L."""
+    daily_trades["pnl"] += pnl_amount
 
 
 # =========================
@@ -52,12 +74,7 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
     target = trade["target"]
     rr = trade["rr"]
 
-    # IST time: if server is UTC, convert
-    from time import timezone as _tz
-    from datetime import timedelta
-    now = datetime.now()
-    if abs(_tz) < 3600:  # Server is UTC
-        now = now + timedelta(hours=5, minutes=30)
+    now = _now_ist()
 
     msg = (
         f"\U0001f4cc *BANKNIFTY TRADE ALERT*\n\n"
@@ -73,10 +90,37 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
     return msg
 
 
+def format_exit_alert(trade: dict, exit_price: float, reason: str) -> str:
+    """Format exit alert for Telegram."""
+    entry = trade["entry"]
+    trade_type = trade["type"]
+
+    if trade_type == "BUY":
+        pnl_pts = exit_price - entry
+    else:
+        pnl_pts = entry - exit_price
+
+    emoji = "\u2705" if pnl_pts > 0 else "\U0001f534"
+    now = _now_ist()
+
+    msg = (
+        f"{emoji} *TRADE EXIT*\n\n"
+        f"*Strategy* : {trade['strategy']}\n"
+        f"*Type*     : {trade_type}\n"
+        f"*Entry*    : {entry:.1f}\n"
+        f"*Exit*     : {exit_price:.1f}\n"
+        f"*P&L*      : {pnl_pts:+.1f} pts\n"
+        f"*Reason*   : {reason}\n"
+        f"*Time*     : {now.strftime('%I:%M %p')}"
+    )
+
+    return msg
+
+
 def format_daily_summary(trades_today: list) -> str:
     """Format end-of-day summary."""
     if not trades_today:
-        return "📊 *Daily Summary*\nNo trades today."
+        return "\U0001f4ca *Daily Summary*\nNo trades today."
 
     total = len(trades_today)
     strategies = {}
@@ -86,16 +130,39 @@ def format_daily_summary(trades_today: list) -> str:
 
     strat_text = "\n".join(f"  {k}: {v}" for k, v in strategies.items())
 
-    return f"""
-📊 *DAILY TRADE SUMMARY*
-━━━━━━━━━━━━━━━━━━━━━
-Total Signals: {total}
-Strategies:
-{strat_text}
+    return (
+        f"\U0001f4ca *DAILY TRADE SUMMARY*\n"
+        f"Total Signals: {total}\n"
+        f"Strategies:\n{strat_text}\n"
+        f"Daily P&L: {daily_trades['pnl']:+.0f} pts"
+    )
 
-💡 Review your positions and book profits!
-━━━━━━━━━━━━━━━━━━━━━
-""".strip()
+
+# =========================
+# CORRELATED SIGNAL DETECTION
+# =========================
+def check_correlated_signals(trade: dict) -> int:
+    """Returns count of same-direction signals in last 5 minutes."""
+    now = _now_ist()
+    trade_type = trade["type"]
+
+    # Clean old signals (> 10 min)
+    cutoff = now - timedelta(minutes=10)
+    recent_signals[:] = [s for s in recent_signals if s["time"] > cutoff]
+
+    # Count same direction within 5 min
+    same_dir = [s for s in recent_signals
+                if s["type"] == trade_type
+                and (now - s["time"]).total_seconds() < 300]
+
+    # Record this signal
+    recent_signals.append({
+        "time": now,
+        "type": trade_type,
+        "strategy": trade["strategy"],
+    })
+
+    return len(same_dir)
 
 
 # =========================
@@ -113,8 +180,14 @@ def process_trade_v2(trade: dict):
     reset_daily_state()
 
     # Daily trade limit
-    if daily_trades["count"] >= MAX_TRADES_PER_DAY:
-        print(f"[LIMIT] Max {MAX_TRADES_PER_DAY} trades/day reached. Skipping.")
+    max_trades = MAX_TRADES_EXPIRY if trade.get("is_expiry") else MAX_TRADES_PER_DAY
+    if daily_trades["count"] >= max_trades:
+        print(f"[LIMIT] Max {max_trades} trades/day reached. Skipping.")
+        return None
+
+    # Daily loss limit
+    if daily_trades["pnl"] <= -MAX_DAILY_LOSS:
+        print(f"[LOSS LIMIT] Daily loss {daily_trades['pnl']:.0f} exceeds {MAX_DAILY_LOSS}. Stopped.")
         return None
 
     # AI Filter
@@ -128,8 +201,21 @@ def process_trade_v2(trade: dict):
     if ai_result["decision"] != "TAKE":
         return None
 
+    # Expiry day: only HIGH confidence
+    if trade.get("is_expiry") and ai_result["confidence"] not in ("HIGH",):
+        print(f"  -> Expiry day: only HIGH confidence allowed (got {ai_result['confidence']})")
+        return None
+
+    # Correlated signal warning
+    same_dir_count = check_correlated_signals(trade)
+    corr_warning = ""
+    if same_dir_count >= 2:
+        corr_warning = f"\n\n_Note: {same_dir_count + 1} {trade['type']} signals in 5min — same directional bet_"
+
     # Send Telegram alert (BankNifty index levels only)
     msg = format_trade_alert_v2(trade, ai_result)
+    if corr_warning:
+        msg += corr_warning
     send_telegram_alert(msg)
 
     # Track daily state
@@ -138,10 +224,10 @@ def process_trade_v2(trade: dict):
         "strategy": trade["strategy"],
         "type": trade["type"],
         "entry": trade["entry"],
-        "time": datetime.now().strftime("%H:%M"),
+        "time": _now_ist().strftime("%H:%M"),
     })
 
-    print(f"  → ALERT SENT! Trade #{daily_trades['count']} today")
+    print(f"  -> ALERT SENT! Trade #{daily_trades['count']} today")
     return trade
 
 
@@ -149,9 +235,6 @@ def process_trade_v2(trade: dict):
 # LOCAL TEST
 # =========================
 if __name__ == "__main__":
-    from ml.features import extract_features
-
-    # Simulate a mock trade with full features
     mock_features = {
         "strategy_encoded": 0,
         "rsi_14": 55.0,
@@ -175,6 +258,9 @@ if __name__ == "__main__":
         "atr": 45.0,
         "rr": 2.0,
         "sl_distance_norm": 0.8,
+        "consolidation_ratio": 1.8,
+        "ema_spread": 0.3,
+        "range_vs_avg": 1.2,
     }
 
     mock_trade = {

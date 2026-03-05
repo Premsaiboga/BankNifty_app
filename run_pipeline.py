@@ -64,7 +64,7 @@ def main():
         print(f"\nTo start live trading:")
         print(f"  python run_pipeline.py live")
         print(f"\nOr directly:")
-        print(f"  python live/zerodha_stream_v2.py")
+        print(f"  python -m live.live_runner")
 
     elif command == "live":
         print(f"\n{'='*60}")
@@ -77,7 +77,7 @@ def main():
         print(f"  4. Market is open (9:15 AM - 3:30 PM IST)")
         print()
 
-        run_step("live/zerodha_stream_v2.py", "Live Trading V2")
+        run_step("live/live_runner.py", "Live Trading V2")
 
     else:
         print(f"Unknown command: {command}")

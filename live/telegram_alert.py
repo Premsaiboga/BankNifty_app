@@ -18,7 +18,8 @@ def send_telegram_alert(message: str):
 
     payload = {
         "chat_id": CHAT_ID,
-        "text": message
+        "text": message,
+        "parse_mode": "Markdown",
     }
 
     try:
