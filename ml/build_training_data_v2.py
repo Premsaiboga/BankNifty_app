@@ -104,7 +104,8 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
 
         best_move = max(best_move, move_r)
 
-        # Trail: breakeven at 0.8R, trail at 1.2R+
+        # Trail: breakeven at 0.8R, dynamic trail at 1.5R+
+        # NO fixed target — let trailing capture 1:2, 1:3, 1:4+
         if best_move >= 0.8:
             if trade_type == "BUY":
                 new_sl = entry + 2
@@ -113,27 +114,23 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
                 new_sl = entry - 2
                 current_sl = min(current_sl, new_sl)
 
-        if best_move >= 1.2:
+        if best_move >= 1.5:
             if trade_type == "BUY":
-                trail_sl = entry + (best_move - 0.6) * sl_dist
+                trail_sl = entry + (best_move - 0.5) * sl_dist
                 current_sl = max(current_sl, trail_sl)
             else:
-                trail_sl = entry - (best_move - 0.6) * sl_dist
+                trail_sl = entry - (best_move - 0.5) * sl_dist
                 current_sl = min(current_sl, trail_sl)
 
-        # Check SL
+        # Check SL (no fixed target check — trailing handles exits)
         if trade_type == "BUY":
             if candle["low"] <= current_sl:
                 pnl = current_sl - entry
                 return 1 if pnl > 0 else 0
-            if candle["high"] >= target:
-                return 1
         else:
             if candle["high"] >= current_sl:
                 pnl = entry - current_sl
                 return 1 if pnl > 0 else 0
-            if candle["low"] <= target:
-                return 1
 
     return 0  # Timeout = loss
 

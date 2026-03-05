@@ -1,19 +1,15 @@
 """
-Comprehensive Backtest V3
-==========================
-Backtests all 5 strategies with AI filtering + TRAILING STOPS.
-Trailing stops convert many full losses into breakeven/small wins.
+Comprehensive Backtest V3 — Dynamic Trailing Stops
+====================================================
+Backtests all 5 strategies with AI filtering + DYNAMIC TRAILING.
+NO fixed target — trailing stops let winners run to 1:2, 1:3, 1:4+.
 
 Exit Logic (per candle):
-1. Check SL hit → LOSS (-1R)
-2. Check TARGET hit → WIN (+2R)
-3. If price moved 0.5R in favor → move SL to BREAKEVEN
-4. If price moved 1.0R in favor → trail SL to lock 0.5R profit
-5. If trailed SL hit → PARTIAL WIN (0 to +1.5R)
-6. End of day → exit at close price
-
-This creates 60-70% profitable trades because many trades that
-would have been full losses now exit at breakeven or small profit.
+1. Check trailed SL hit → exit at trail level
+2. If price moved 0.8R in favor → move SL to BREAKEVEN
+3. If price moved 1.5R+ → trail SL dynamically (locks move - 0.5R)
+4. End of day → exit at close price
+5. NO fixed target cap — trailing captures maximum move (1:2, 1:3, 1:4+)
 """
 
 import sys
@@ -62,25 +58,21 @@ print(f"After warmup: {len(df)} candles")
 # =========================
 def evaluate_trade(df, trade, max_candles=60):
     """
-    Evaluate trade with TRAILING STOP logic:
-    - Move SL to breakeven after 0.5R profit
-    - Trail SL at (move - 0.5R) after 1.0R profit
-    - This dramatically increases the % of profitable exits
+    Evaluate trade with DYNAMIC TRAILING STOP logic:
+    - Move SL to breakeven after 0.8R profit
+    - Trail SL at (move - 0.5R) after 1.5R profit
+    - NO fixed target cap — lets winners run to 1:2, 1:3, 1:4+
     """
     entry = trade["entry"]
     sl = trade["stoploss"]
-    target = trade["target"]
     trade_type = trade["type"]
     entry_time = trade["time"]
-    rr = trade["rr"]
 
     # Apply slippage
     if trade_type == "BUY":
         entry += SLIPPAGE_POINTS
-        target += SLIPPAGE_POINTS
     else:
         entry -= SLIPPAGE_POINTS
-        target -= SLIPPAGE_POINTS
 
     idx_list = df.index[df["datetime"] == entry_time].tolist()
     if not idx_list:
@@ -121,9 +113,10 @@ def evaluate_trade(df, trade, max_candles=60):
 
         best_move = max(best_move, move_r)
 
-        # === TRAILING STOP LOGIC ===
+        # === DYNAMIC TRAILING STOP LOGIC ===
         # Breakeven at 0.8R (gives trade room to breathe)
-        # Trail at 1.2R+ (locks in meaningful profit)
+        # Trail at 1.5R+ (locks move - 0.5R, so at 2R locks 1.5R, at 3R locks 2.5R)
+        # NO fixed target — let winners run to 1:2, 1:3, 1:4+
 
         # After 0.8R profit: move SL to breakeven
         if best_move >= 0.8 and not trailed:
@@ -135,13 +128,14 @@ def evaluate_trade(df, trade, max_candles=60):
                 current_sl = min(current_sl, new_sl)
             trailed = True
 
-        # After 1.2R profit: trail SL to lock in profit
-        if best_move >= 1.2:
+        # After 1.5R profit: trail SL dynamically (locks move - 0.5R)
+        # At 2R move → SL at 1.5R profit, at 3R → SL at 2.5R, at 4R → SL at 3.5R
+        if best_move >= 1.5:
             if trade_type == "BUY":
-                trail_sl = entry + (best_move - 0.6) * sl_dist
+                trail_sl = entry + (best_move - 0.5) * sl_dist
                 current_sl = max(current_sl, trail_sl)
             else:
-                trail_sl = entry - (best_move - 0.6) * sl_dist
+                trail_sl = entry - (best_move - 0.5) * sl_dist
                 current_sl = min(current_sl, trail_sl)
 
         # Check SL hit (use current_sl which may be trailed)
@@ -155,10 +149,6 @@ def evaluate_trade(df, trade, max_candles=60):
                 else:
                     return {"result": "LOSS", "pnl_r": -1}
 
-            # Check target hit
-            if candle["high"] >= target:
-                return {"result": "WIN", "pnl_r": rr}
-
         else:  # SELL
             if candle["high"] >= current_sl:
                 pnl_r = (entry - current_sl) / sl_dist
@@ -168,9 +158,6 @@ def evaluate_trade(df, trade, max_candles=60):
                     return {"result": "BREAKEVEN", "pnl_r": 0}
                 else:
                     return {"result": "LOSS", "pnl_r": -1}
-
-            if candle["low"] <= target:
-                return {"result": "WIN", "pnl_r": rr}
 
     # Timeout — use current position
     last = df.iloc[end_idx - 1]
@@ -266,7 +253,6 @@ print(f"  BACKTEST RESULTS V3 (with trailing stops)")
 print(f"{'='*60}")
 
 total_trades = len(df_results)
-wins = len(df_results[df_results["result"] == "WIN"])
 trail_wins = len(df_results[df_results["result"] == "TRAIL_WIN"])
 breakevens = len(df_results[df_results["result"] == "BREAKEVEN"])
 eod_wins = len(df_results[df_results["result"] == "EOD_WIN"])
@@ -274,14 +260,24 @@ eod_losses = len(df_results[df_results["result"] == "EOD_LOSS"])
 losses = len(df_results[df_results["result"] == "LOSS"])
 timeouts = len(df_results[df_results["result"] == "TIMEOUT"])
 
-# Profitable = WIN + TRAIL_WIN + EOD_WIN + BREAKEVEN
-profitable = wins + trail_wins + eod_wins + breakevens
+# Profitable = TRAIL_WIN + EOD_WIN + BREAKEVEN
+profitable = trail_wins + eod_wins + breakevens
 profit_rate = profitable / total_trades * 100 if total_trades > 0 else 0
 net_pnl_r = df_results["pnl_r"].sum()
 
+# RR distribution of trail wins
+tw = df_results[df_results["result"] == "TRAIL_WIN"]
+r1_wins = len(tw[tw["pnl_r"] < 1.5])  # 1:1 range
+r2_wins = len(tw[(tw["pnl_r"] >= 1.5) & (tw["pnl_r"] < 2.5)])  # 1:2 range
+r3_wins = len(tw[(tw["pnl_r"] >= 2.5) & (tw["pnl_r"] < 3.5)])  # 1:3 range
+r4_plus = len(tw[tw["pnl_r"] >= 3.5])  # 1:4+ range
+
 print(f"\nTotal AI-filtered trades: {total_trades}")
-print(f"\n  Full Target Hits (WIN):    {wins:>4} trades  (+{wins*2:.0f}R)")
-print(f"  Trail Stop Wins:           {trail_wins:>4} trades  (+{df_results[df_results['result']=='TRAIL_WIN']['pnl_r'].sum():.1f}R)")
+print(f"\n  Trail Stop Wins:           {trail_wins:>4} trades  (+{tw['pnl_r'].sum():.1f}R)")
+print(f"    ├─ 1:1 range (<1.5R):    {r1_wins:>4} trades")
+print(f"    ├─ 1:2 range (1.5-2.5R): {r2_wins:>4} trades")
+print(f"    ├─ 1:3 range (2.5-3.5R): {r3_wins:>4} trades")
+print(f"    └─ 1:4+ range (>3.5R):   {r4_plus:>4} trades")
 print(f"  Breakeven Exits:           {breakevens:>4} trades  ( 0R)")
 print(f"  EOD Wins:                  {eod_wins:>4} trades  (+{df_results[df_results['result']=='EOD_WIN']['pnl_r'].sum():.1f}R)")
 print(f"  EOD Losses:                {eod_losses:>4} trades  ({df_results[df_results['result']=='EOD_LOSS']['pnl_r'].sum():.1f}R)")

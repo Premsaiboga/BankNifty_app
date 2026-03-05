@@ -66,32 +66,48 @@ def record_trade_result(pnl_amount: float):
 # TELEGRAM FORMATTERS
 # =========================
 def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
-    """Format clean trade alert for Telegram — BankNifty index levels only."""
+    """Format trade alert with T1/T2/T3/T4 target levels + dynamic trailing."""
 
-    direction = "BUY" if trade["type"] == "BUY" else "SELL"
+    direction = "🟢 BUY" if trade["type"] == "BUY" else "🔴 SELL"
     entry = trade["entry"]
     sl = trade["stoploss"]
-    target = trade["target"]
-    rr = trade["rr"]
+    sl_dist = abs(entry - sl)
+
+    # Calculate target levels
+    if trade["type"] == "BUY":
+        t1 = entry + sl_dist * 1  # 1:1
+        t2 = entry + sl_dist * 2  # 1:2
+        t3 = entry + sl_dist * 3  # 1:3
+        t4 = entry + sl_dist * 4  # 1:4
+    else:
+        t1 = entry - sl_dist * 1
+        t2 = entry - sl_dist * 2
+        t3 = entry - sl_dist * 3
+        t4 = entry - sl_dist * 4
 
     now = _now_ist()
 
     msg = (
-        f"\U0001f4cc *BANKNIFTY TRADE ALERT*\n\n"
+        f"📌 *BANKNIFTY TRADE ALERT*\n\n"
         f"*Strategy* : {trade['strategy']}\n"
         f"*Type*     : {direction}\n"
         f"*Entry*    : {entry:.1f}\n"
-        f"*SL*       : {sl:.1f}\n"
-        f"*Target*   : {target:.1f} (RR 1:{rr})\n"
+        f"*SL*       : {sl:.1f} ({sl_dist:.0f} pts)\n\n"
+        f"*Targets (Dynamic Trail):*\n"
+        f"  T1 (1:1) : {t1:.1f}\n"
+        f"  T2 (1:2) : {t2:.1f}\n"
+        f"  T3 (1:3) : {t3:.1f}\n"
+        f"  T4 (1:4) : {t4:.1f}\n\n"
         f"*AI Prob*  : {ai_result['probability']}\n"
-        f"*Time*     : {now.strftime('%I:%M %p')}"
+        f"*Time*     : {now.strftime('%I:%M %p')}\n\n"
+        f"_Trail: BE at 0.8R, dynamic trail at 1.5R+_"
     )
 
     return msg
 
 
 def format_exit_alert(trade: dict, exit_price: float, reason: str) -> str:
-    """Format exit alert for Telegram."""
+    """Format exit alert with RR achieved for Telegram."""
     entry = trade["entry"]
     trade_type = trade["type"]
 
@@ -100,7 +116,15 @@ def format_exit_alert(trade: dict, exit_price: float, reason: str) -> str:
     else:
         pnl_pts = entry - exit_price
 
-    emoji = "\u2705" if pnl_pts > 0 else "\U0001f534"
+    sl_dist = abs(entry - trade.get("original_sl", trade.get("stoploss", entry)))
+    rr_achieved = pnl_pts / sl_dist if sl_dist > 0 else 0
+
+    emoji = "✅" if pnl_pts > 0 else "🔴"
+    if rr_achieved >= 2.0:
+        emoji = "🏆"  # Big win
+    elif rr_achieved >= 1.0:
+        emoji = "💰"  # Good win
+
     now = _now_ist()
 
     msg = (
@@ -109,7 +133,7 @@ def format_exit_alert(trade: dict, exit_price: float, reason: str) -> str:
         f"*Type*     : {trade_type}\n"
         f"*Entry*    : {entry:.1f}\n"
         f"*Exit*     : {exit_price:.1f}\n"
-        f"*P&L*      : {pnl_pts:+.1f} pts\n"
+        f"*P&L*      : {pnl_pts:+.1f} pts (*{rr_achieved:+.1f}R*)\n"
         f"*Reason*   : {reason}\n"
         f"*Time*     : {now.strftime('%I:%M %p')}"
     )
