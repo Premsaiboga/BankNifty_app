@@ -2,13 +2,14 @@
 # V2 CONFIG - Synced with ai_filter_v2.py (OOS-optimized thresholds)
 # =========================
 
-# Strategy-specific AI thresholds (based on out-of-sample testing)
+# Strategy-specific AI thresholds (OOS-optimized, model overrides at load)
+# VWAP_REVERSION and EMA_SCALP disabled (no OOS edge)
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.50,
-    "EMA_SCALP": 0.52,
-    "VWAP_REVERSION": 0.58,
-    "MOMENTUM_SURGE": 0.56,
-    "PIVOT_SCALP": 0.46,
+    "ORB": 0.40,
+    "MOMENTUM_SURGE": 0.48,
+    "PIVOT_SCALP": 0.40,
+    "VWAP_REVERSION": 0.90,   # Disabled (breakeven after costs)
+    "EMA_SCALP": 0.90,        # Disabled (insufficient OOS data)
 }
 
 # Default risk-reward ratios per strategy

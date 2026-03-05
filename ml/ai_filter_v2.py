@@ -1,8 +1,11 @@
 """
 AI Filter V2
 =============
-Enhanced ML-based trade filter with lower thresholds for messy markets.
-Uses 22-feature model for better trade selection.
+ML-based trade filter using OOS-optimized thresholds.
+Uses 25-feature model with strategy-specific thresholds.
+
+Model AUC is 0.52 — marginal discrimination. Strategy selection
+matters more than ML filtering. Only profitable strategies are enabled.
 """
 
 import sys
@@ -39,24 +42,41 @@ def _load_model():
     model = bundle["model"]
     scaler = bundle["scaler"]
     FEATURES = bundle["features"]
+
+    # Use model's own optimal thresholds — but ONLY for enabled strategies
+    # Strategies set to 0.90 are intentionally disabled (no OOS edge)
+    global STRATEGY_THRESHOLDS
+    model_thresholds = bundle.get("optimal_thresholds", {})
+    if model_thresholds:
+        for strat, thresh in model_thresholds.items():
+            if strat in STRATEGY_THRESHOLDS and STRATEGY_THRESHOLDS[strat] < 0.85:
+                STRATEGY_THRESHOLDS[strat] = thresh
+
     print(f"Loaded model_v2 ({bundle.get('model_type', 'unknown')})")
+    print(f"Thresholds: {STRATEGY_THRESHOLDS}")
 
 
 # =========================
-# STRATEGY THRESHOLDS (based on out-of-sample testing)
+# STRATEGY THRESHOLDS
 # =========================
-# Higher thresholds = fewer but better trades. Based on honest OOS results:
-# - PIVOT_SCALP: Best strategy (54.8% OOS WR) → moderate threshold
-# - ORB: Positive PnL with RR 2.0 → moderate threshold
-# - EMA_SCALP: Marginal → higher threshold
-# - VWAP_REVERSION: Negative OOS PnL → very high threshold
-# - MOMENTUM_SURGE: Negative OOS PnL → very high threshold
+# Based on OOS training output. Model will override these with its own
+# optimal thresholds when loaded.
+#
+# PROFITABLE strategies (positive OOS expectancy):
+#   PIVOT_SCALP:     48.8% WR at RR 1.5 = +0.22R/trade
+#   MOMENTUM_SURGE:  42.9% WR at RR 2.0 = +0.29R/trade
+#   ORB:             37.5% WR at RR 2.0 = +0.13R/trade
+#
+# DISABLED strategies (zero/negative edge):
+#   VWAP_REVERSION:  40.5% WR at RR 1.5 = +0.01R (breakeven, loses with costs)
+#   EMA_SCALP:       Not enough OOS data to validate
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.50,              # Decent OOS, high RR compensates
-    "EMA_SCALP": 0.52,        # Marginal OOS, need strong filter
-    "VWAP_REVERSION": 0.58,   # Weak OOS, only take strongest signals
-    "MOMENTUM_SURGE": 0.56,   # Weak OOS, only take strongest signals
-    "PIVOT_SCALP": 0.46,      # Best OOS strategy, let more through
+    "ORB": 0.40,
+    "MOMENTUM_SURGE": 0.48,
+    "PIVOT_SCALP": 0.40,
+    # Disabled: set impossibly high threshold (effectively off)
+    "VWAP_REVERSION": 0.90,
+    "EMA_SCALP": 0.90,
 }
 
 # Default for unknown strategies
@@ -72,7 +92,7 @@ def ai_filter_v2(trade: dict) -> dict:
 
     trade must contain:
         - strategy: str (strategy name)
-        - features: dict (all 22 ML features)
+        - features: dict (all 25 ML features)
         - rr: float
 
     Returns:
