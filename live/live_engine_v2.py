@@ -19,7 +19,6 @@ load_dotenv()
 
 from ml.ai_filter_v2 import ai_filter_v2
 from live.telegram_alert import send_telegram_alert
-from live.option_calculator import get_option_recommendation
 
 # =========================
 # CONFIG
@@ -44,22 +43,32 @@ def reset_daily_state():
 # =========================
 # TELEGRAM FORMATTERS
 # =========================
-def format_trade_alert_v2(trade: dict, ai_result: dict, opt: dict) -> str:
-    """Format clean trade alert for Telegram."""
+def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
+    """Format clean trade alert for Telegram — BankNifty index levels only."""
 
     direction = "BUY" if trade["type"] == "BUY" else "SELL"
-    confidence_tag = {"HIGH": "High", "MEDIUM": "Medium", "LOW": "Low", "NO_MODEL": "N/A"}
+    entry = trade["entry"]
+    sl = trade["stoploss"]
+    target = trade["target"]
+    rr = trade["rr"]
 
-    msg = f"""Strategy: {trade['strategy']}
-Type: {direction}
-Strike Price: BANKNIFTY {opt['expiry']} {opt['strike']}{opt['option_type']}
-Entry: {opt['premium_entry']:.0f}
-Stoploss: {opt['premium_sl']:.0f}
-Target: {opt['premium_target']:.0f}
-AI Prob: {ai_result['probability']:.0%} ({confidence_tag.get(ai_result['confidence'], 'Low')})
-Time: {datetime.now().strftime('%I:%M %p')}
+    # IST time: if server is UTC, convert
+    from time import timezone as _tz
+    from datetime import timedelta
+    now = datetime.now()
+    if abs(_tz) < 3600:  # Server is UTC
+        now = now + timedelta(hours=5, minutes=30)
 
-Alternative: BANKNIFTY {opt['expiry']} {opt['alt_strike']}{opt['alt_option_type']} / {opt['alt_premium_entry']:.0f} / {opt['alt_premium_sl']:.0f} / {opt['alt_premium_target']:.0f}"""
+    msg = (
+        f"\U0001f4cc *BANKNIFTY TRADE ALERT*\n\n"
+        f"*Strategy* : {trade['strategy']}\n"
+        f"*Type*     : {direction}\n"
+        f"*Entry*    : {entry:.1f}\n"
+        f"*SL*       : {sl:.1f}\n"
+        f"*Target*   : {target:.1f} (RR 1:{rr})\n"
+        f"*AI Prob*  : {ai_result['probability']}\n"
+        f"*Time*     : {now.strftime('%I:%M %p')}"
+    )
 
     return msg
 
@@ -119,12 +128,8 @@ def process_trade_v2(trade: dict):
     if ai_result["decision"] != "TAKE":
         return None
 
-    # Calculate option recommendation
-    atr = trade["features"].get("atr", 50)
-    opt = get_option_recommendation(trade, atr)
-
-    # Send Telegram alert
-    msg = format_trade_alert_v2(trade, ai_result, opt)
+    # Send Telegram alert (BankNifty index levels only)
+    msg = format_trade_alert_v2(trade, ai_result)
     send_telegram_alert(msg)
 
     # Track daily state

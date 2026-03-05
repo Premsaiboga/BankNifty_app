@@ -2,7 +2,7 @@
 End-to-End Test
 ================
 Simulates realistic trade signals through the full pipeline:
-  Strategy Signal → AI Filter → Option Calculator → Telegram Alert
+  Strategy Signal → AI Filter → Telegram Alert (BankNifty index levels)
 
 No live data needed — uses mock candle data based on recent BankNifty levels.
 """
@@ -17,7 +17,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from ml.ai_filter_v2 import ai_filter_v2
-from live.option_calculator import get_option_recommendation
 from live.live_engine_v2 import format_trade_alert_v2, process_trade_v2
 from live.telegram_alert import send_telegram_alert
 
@@ -76,9 +75,8 @@ if result:
     print("BUY alert sent!")
 else:
     print("BUY trade skipped by AI — sending manually for test...")
-    opt = get_option_recommendation(buy_trade, 48.0)
     ai_result = {"probability": 0.55, "confidence": "MEDIUM"}
-    msg = format_trade_alert_v2(buy_trade, ai_result, opt)
+    msg = format_trade_alert_v2(buy_trade, ai_result)
     send_telegram_alert(msg)
     print("Manual BUY alert sent!")
 
@@ -129,9 +127,8 @@ if result:
     print("SELL alert sent!")
 else:
     print("SELL trade skipped by AI — sending manually for test...")
-    opt = get_option_recommendation(sell_trade, 52.0)
     ai_result = {"probability": 0.58, "confidence": "MEDIUM"}
-    msg = format_trade_alert_v2(sell_trade, ai_result, opt)
+    msg = format_trade_alert_v2(sell_trade, ai_result)
     send_telegram_alert(msg)
     print("Manual SELL alert sent!")
 
@@ -182,9 +179,8 @@ if result:
     print("MOMENTUM alert sent!")
 else:
     print("MOMENTUM trade skipped by AI — sending manually for test...")
-    opt = get_option_recommendation(momentum_trade, 55.0)
     ai_result = {"probability": 0.52, "confidence": "LOW"}
-    msg = format_trade_alert_v2(momentum_trade, ai_result, opt)
+    msg = format_trade_alert_v2(momentum_trade, ai_result)
     send_telegram_alert(msg)
     print("Manual MOMENTUM alert sent!")
 
