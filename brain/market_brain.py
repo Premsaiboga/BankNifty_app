@@ -10,57 +10,52 @@ def ema(series, period):
 
 
 # ---------------- BIAS DETECTION ----------------
-def detect_bias(df_15m):
+def detect_bias(df_5m):
     """
+    Detect market bias from 5m candles (NOT 15m — we don't have enough 15m in a day).
+    Uses EMA 9/21, price structure, and price vs VWAP.
+
     Returns:
         bias: BUY / SELL / NEUTRAL
         score: integer
     """
 
-    # ---------- SAFETY CHECK ----------
-    # Need minimum candles for EMA50 + structure check
-    if df_15m is None or len(df_15m) < 50:
+    if df_5m is None or len(df_5m) < 25:
         return "NEUTRAL", 0
 
-    required_cols = {"close", "volume"}
-    if not required_cols.issubset(df_15m.columns):
+    required_cols = {"close", "high", "low"}
+    if not required_cols.issubset(df_5m.columns):
         return "NEUTRAL", 0
 
-    close = df_15m["close"]
-    volume = df_15m["volume"]
+    close = df_5m["close"]
 
-    # ---------- EMA ----------
-    ema20 = ema(close, 20)
-    ema50 = ema(close, 50)
+    # ---------- EMA 9/21 on 5m ----------
+    ema9 = ema(close, 9)
+    ema21 = ema(close, 21)
 
     score = 0
 
-    # ---------- Trend check ----------
-    if ema20.iloc[-1] > ema50.iloc[-1]:
+    # EMA trend
+    if ema9.iloc[-1] > ema21.iloc[-1]:
         score += 1
     else:
         score -= 1
 
-    # ---------- Structure check ----------
-    # safe because len >= 50 already
-    if close.iloc[-1] > close.iloc[-5]:
+    # Price structure: last close vs 10 candles ago (50 mins)
+    lookback = min(10, len(close) - 1)
+    if close.iloc[-1] > close.iloc[-lookback]:
         score += 1
     else:
         score -= 1
 
-    # ---------- VWAP ----------
-    cumulative_vol = volume.cumsum()
-
-    # avoid divide-by-zero
-    if cumulative_vol.iloc[-1] == 0:
-        return "NEUTRAL", score
-
-    vwap = (close * volume).cumsum() / cumulative_vol
-
-    if close.iloc[-1] > vwap.iloc[-1]:
-        score += 1
-    else:
-        score -= 1
+    # Price vs VWAP (if available)
+    if "vwap" in df_5m.columns:
+        vwap_val = df_5m["vwap"].iloc[-1]
+        if not pd.isna(vwap_val) and vwap_val > 0:
+            if close.iloc[-1] > vwap_val:
+                score += 1
+            else:
+                score -= 1
 
     # ---------- FINAL DECISION ----------
     if score >= 2:
@@ -72,36 +67,35 @@ def detect_bias(df_15m):
 
 
 # ---------------- REGIME DETECTION ----------------
-def detect_regime(df_15m):
+def detect_regime(df_5m):
     """
-    Detects market regime:
-    TREND or RANGE
+    Detect market regime from 5m candles.
+    TREND = directional move > 1.5x ATR over recent candles.
+    RANGE = consolidating.
     """
 
-    # Need enough candles for ATR + structure
-    if df_15m is None or len(df_15m) < 14:
+    if df_5m is None or len(df_5m) < 14:
         return "RANGE"
 
     required_cols = {"high", "low", "close"}
-    if not required_cols.issubset(df_15m.columns):
+    if not required_cols.issubset(df_5m.columns):
         return "RANGE"
 
-    high = df_15m["high"]
-    low = df_15m["low"]
-    close = df_15m["close"]
+    high = df_5m["high"]
+    low = df_5m["low"]
+    close = df_5m["close"]
 
-    # ---------- ATR proxy ----------
+    # ATR on 5m candles
     atr = (high - low).rolling(14).mean()
 
-    # protect NaN startup
     if pd.isna(atr.iloc[-1]):
         return "RANGE"
 
-    # ---------- Recent movement ----------
+    # Recent directional move over 10 candles (50 mins)
     lookback = min(10, len(close) - 1)
     recent_move = abs(close.iloc[-1] - close.iloc[-lookback])
 
-    if recent_move > atr.iloc[-1] * 2:
+    if recent_move > atr.iloc[-1] * 1.5:
         return "TREND"
 
     return "RANGE"

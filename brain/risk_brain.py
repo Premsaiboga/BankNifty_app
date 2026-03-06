@@ -28,15 +28,19 @@ def adjust_targets(trade, df_5m):
 
 def reversal_warning(df_5m):
     """
-    Simple exhaustion detection
+    Exhaustion detection — only warn on truly exhausted moves.
+    Old threshold (10 pts) was way too sensitive for BankNifty.
     """
+    if len(df_5m) < 5:
+        return False
 
     last = df_5m["close"].iloc[-1]
     prev = df_5m["close"].iloc[-5]
+    momentum = abs(last - prev)
 
-    momentum = last - prev
-
-    if abs(momentum) < 10:
+    # Use ATR-relative threshold: exhausted = moved < 0.1 ATR in 5 candles
+    atr_val = (df_5m["high"] - df_5m["low"]).rolling(14).mean().iloc[-1]
+    if atr_val > 0 and momentum < atr_val * 0.1:
         return True
 
     return False

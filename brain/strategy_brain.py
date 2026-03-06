@@ -2,24 +2,20 @@
 
 def allow_trade(trade, bias, regime):
     """
-    trade = dict from strategy
+    Light filter — only block clear counter-trend trades.
+    NEUTRAL bias allows ALL trades (both BUY and SELL).
+    Regime info is logged but does NOT block trades.
     """
 
     trade_type = trade["type"]
-    strategy = trade["strategy"]
 
-    # Block counter trend
+    # Only block if bias is clearly opposite to trade direction
     if bias == "BUY" and trade_type == "SELL":
         return False
 
     if bias == "SELL" and trade_type == "BUY":
         return False
 
-    # Strategy-regime permission (V2 strategy names)
-    if regime == "TREND" and strategy in ("PIVOT_SCALP", "PIVOT"):
-        return False
-
-    if regime == "RANGE" and strategy in ("VWAP_REVERSION", "VWAP_PULLBACK", "VWAP"):
-        return False
-
+    # NEUTRAL bias → allow everything (this was the main bug)
+    # Regime → no longer blocks (AI filter handles quality)
     return True

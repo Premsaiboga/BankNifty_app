@@ -206,27 +206,22 @@ def try_build_15m(c5):
 
 
 # =========================
-# UPDATE MARKET BRAIN (bias + regime from 15m data)
+# UPDATE MARKET BRAIN (bias + regime from 5m data directly)
 # =========================
 def update_market_brain():
-    """Update market bias and regime from 15m candle data."""
+    """Update market bias and regime from 5m candle data."""
     global market_bias, market_regime
 
-    if len(candles_15m_raw) < 50:
+    if len(candles_5m_raw) < 25:
         market_bias = "NEUTRAL"
         market_regime = "RANGE"
         return
 
-    df_15m = pd.DataFrame(candles_15m_raw)
-
-    # Ensure required columns exist
-    if "volume" not in df_15m.columns:
-        df_15m["volume"] = 0
+    df_5m = pd.DataFrame(candles_5m_raw)
 
     try:
-        market_bias, bias_score = detect_bias(df_15m)
-        market_regime = detect_regime(df_15m)
-        print(f"  BRAIN: bias={market_bias}({bias_score}) regime={market_regime}")
+        market_bias, bias_score = detect_bias(df_5m)
+        market_regime = detect_regime(df_5m)
     except Exception as e:
         print(f"  Brain error: {e}")
         market_bias = "NEUTRAL"
@@ -260,11 +255,7 @@ def check_daily_reset():
 # LUNCH-TIME CHECK
 # =========================
 def is_lunch_time(ist_time):
-    """Returns True during 12:15-13:30 IST dead zone."""
-    if ist_time.hour == 12 and ist_time.minute >= 15:
-        return True
-    if ist_time.hour == 13 and ist_time.minute <= 30:
-        return True
+    """Lunch break disabled — trade 9:15 to 15:15."""
     return False
 
 
@@ -295,20 +286,17 @@ def process_5m_candle(c5):
         "volume": c5.get("volume", 0),
     })
 
-    # Build 15m candle and update brain
-    if try_build_15m(c5):
-        update_market_brain()
+    # Build 15m candle (kept for compatibility)
+    try_build_15m(c5)
+
+    # Update market brain every 5m candle (uses 5m data directly)
+    update_market_brain()
 
     n = len(candles_5m_raw)
 
     # Need minimum candles for indicators (ATR=14, RSI=14)
     if n < 4:
         print(f"  Warming up: {n} candles (need 4+ to start)")
-        return
-
-    # Lunch-time filter
-    if is_lunch_time(ist_time):
-        print(f"  LUNCH BREAK (12:15-13:30 IST) - skipping signals")
         return
 
     # Check expiry day
@@ -354,13 +342,11 @@ def process_5m_candle(c5):
             except Exception as e:
                 print(f"  Exit manager error: {e}")
 
-        # Check for move exhaustion (risk_brain)
-        exhaustion = False
+        # Check for move exhaustion (risk_brain) — warning only, does NOT block
         if len(df) >= 5:
             try:
-                exhaustion = reversal_warning(df)
-                if exhaustion:
-                    print(f"  EXHAUSTION WARNING: 5-candle momentum < 10pts")
+                if reversal_warning(df):
+                    print(f"  (low momentum — exhaustion possible)")
             except Exception:
                 pass
 
@@ -398,11 +384,6 @@ def process_5m_candle(c5):
                                     continue
                             except Exception:
                                 pass  # Don't block trades if liquidity check fails
-
-                            # === BRAIN FILTER 3: Exhaustion ===
-                            if exhaustion:
-                                print(f"    -> BLOCKED by risk_brain (move exhaustion)")
-                                continue
 
                             # === Mark expiry day ===
                             if expiry_day:
@@ -553,7 +534,7 @@ kws.on_error = on_error
 # =========================
 print("=" * 50)
 print("BankNifty Live Runner V2 — Production")
-print(f"Strategies: ORB, EMA_SCALP, VWAP_REVERSION, MOMENTUM_SURGE, PIVOT_SCALP")
+print(f"Strategies: ORB, EMA_SCALP, VWAP_REVERSION, PIVOT_SCALP")
 print(f"Brain: bias + regime + liquidity + risk + exits")
 print(f"Server UTC: {SERVER_IS_UTC}")
 print(f"Started: {now_ist().strftime('%Y-%m-%d %H:%M:%S')} IST")
