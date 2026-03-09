@@ -63,19 +63,19 @@ class ORBStrategy:
                 atr = row["atr"]
                 consolidation = row.get("consolidation_ratio", 2.0)
 
-                # Skip choppy markets
-                if consolidation < 1.2:
+                # Skip very choppy markets
+                if consolidation < 1.0:
                     continue
 
                 # ===== DETECT BREAKOUT (don't trade yet, just record) =====
-                if not broke_above and row["close"] > orb_high + 0.3 * atr:
-                    if row["close"] > row["open"] and row["body_ratio"] > 0.50:
+                if not broke_above and row["close"] > orb_high + 0.2 * atr:
+                    if row["close"] > row["open"] and row["body_ratio"] > 0.40:
                         broke_above = True
                         breakout_candle_idx = idx
                         continue
 
-                if not broke_below and row["close"] < orb_low - 0.3 * atr:
-                    if row["close"] < row["open"] and row["body_ratio"] > 0.50:
+                if not broke_below and row["close"] < orb_low - 0.2 * atr:
+                    if row["close"] < row["open"] and row["body_ratio"] > 0.40:
                         broke_below = True
                         breakout_candle_idx = idx
                         continue
@@ -85,8 +85,8 @@ class ORBStrategy:
                     broke_above
                     and trades_per_day[date]["BUY"] < 1
                     and breakout_candle_idx is not None
-                    and idx > breakout_candle_idx  # Must be AFTER breakout
-                    and idx <= breakout_candle_idx + 6  # Within 30 min of breakout
+                    and idx > breakout_candle_idx
+                    and idx <= breakout_candle_idx + 8  # Within 40 min of breakout
                 ):
                     prev = group.iloc[idx - 1]
 
@@ -95,9 +95,8 @@ class ORBStrategy:
                     bounced = (
                         row["close"] > row["open"]        # Bullish bounce
                         and row["close"] > orb_high        # Still above OR high
-                        and row["body_ratio"] > 0.40       # Decent body
-                        and row["rsi_14"] > 50             # Momentum intact
-                        and row["close"] > row.get("ema_9", row["close"])  # Above fast EMA
+                        and row["body_ratio"] > 0.30       # Decent body
+                        and row["rsi_14"] > 45             # Momentum intact
                     )
 
                     if pulled_back and bounced:
@@ -132,7 +131,7 @@ class ORBStrategy:
                     and trades_per_day[date]["SELL"] < 1
                     and breakout_candle_idx is not None
                     and idx > breakout_candle_idx
-                    and idx <= breakout_candle_idx + 6
+                    and idx <= breakout_candle_idx + 8
                 ):
                     prev = group.iloc[idx - 1]
 
@@ -141,9 +140,8 @@ class ORBStrategy:
                     bounced = (
                         row["close"] < row["open"]        # Bearish bounce
                         and row["close"] < orb_low         # Still below OR low
-                        and row["body_ratio"] > 0.40
-                        and row["rsi_14"] < 50
-                        and row["close"] < row.get("ema_9", row["close"])
+                        and row["body_ratio"] > 0.30
+                        and row["rsi_14"] < 55
                     )
 
                     if pulled_back and bounced:

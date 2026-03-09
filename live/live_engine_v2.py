@@ -88,19 +88,19 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
     now = _now_ist()
 
     msg = (
-        f"📌 *BANKNIFTY TRADE ALERT*\n\n"
-        f"*Strategy* : {trade['strategy']}\n"
-        f"*Type*     : {direction}\n"
-        f"*Entry*    : {entry:.1f}\n"
-        f"*SL*       : {sl:.1f} ({sl_dist:.0f} pts)\n\n"
-        f"*Targets (Dynamic Trail):*\n"
+        f"📌 <b>BANKNIFTY TRADE ALERT</b>\n\n"
+        f"<b>Strategy</b> : {trade['strategy']}\n"
+        f"<b>Type</b>     : {direction}\n"
+        f"<b>Entry</b>    : {entry:.1f}\n"
+        f"<b>SL</b>       : {sl:.1f} ({sl_dist:.0f} pts)\n\n"
+        f"<b>Targets (Dynamic Trail):</b>\n"
         f"  T1 (1:1) : {t1:.1f}\n"
         f"  T2 (1:2) : {t2:.1f}\n"
         f"  T3 (1:3) : {t3:.1f}\n"
         f"  T4 (1:4) : {t4:.1f}\n\n"
-        f"*AI Prob*  : {ai_result['probability']}\n"
-        f"*Time*     : {now.strftime('%I:%M %p')}\n\n"
-        f"_Trail: BE at 0.8R, dynamic trail at 1.5R+_"
+        f"<b>AI Prob</b>  : {ai_result['probability']}\n"
+        f"<b>Time</b>     : {now.strftime('%I:%M %p')}\n\n"
+        f"<i>Trail: BE at 0.8R, dynamic trail at 1.5R+</i>"
     )
 
     return msg
@@ -128,14 +128,14 @@ def format_exit_alert(trade: dict, exit_price: float, reason: str) -> str:
     now = _now_ist()
 
     msg = (
-        f"{emoji} *TRADE EXIT*\n\n"
-        f"*Strategy* : {trade['strategy']}\n"
-        f"*Type*     : {trade_type}\n"
-        f"*Entry*    : {entry:.1f}\n"
-        f"*Exit*     : {exit_price:.1f}\n"
-        f"*P&L*      : {pnl_pts:+.1f} pts (*{rr_achieved:+.1f}R*)\n"
-        f"*Reason*   : {reason}\n"
-        f"*Time*     : {now.strftime('%I:%M %p')}"
+        f"{emoji} <b>TRADE EXIT</b>\n\n"
+        f"<b>Strategy</b> : {trade['strategy']}\n"
+        f"<b>Type</b>     : {trade_type}\n"
+        f"<b>Entry</b>    : {entry:.1f}\n"
+        f"<b>Exit</b>     : {exit_price:.1f}\n"
+        f"<b>P&L</b>      : {pnl_pts:+.1f} pts (<b>{rr_achieved:+.1f}R</b>)\n"
+        f"<b>Reason</b>   : {reason}\n"
+        f"<b>Time</b>     : {now.strftime('%I:%M %p')}"
     )
 
     return msg
@@ -144,7 +144,7 @@ def format_exit_alert(trade: dict, exit_price: float, reason: str) -> str:
 def format_daily_summary(trades_today: list) -> str:
     """Format end-of-day summary."""
     if not trades_today:
-        return "\U0001f4ca *Daily Summary*\nNo trades today."
+        return "📊 <b>Daily Summary</b>\nNo trades today."
 
     total = len(trades_today)
     strategies = {}
@@ -155,7 +155,7 @@ def format_daily_summary(trades_today: list) -> str:
     strat_text = "\n".join(f"  {k}: {v}" for k, v in strategies.items())
 
     return (
-        f"\U0001f4ca *DAILY TRADE SUMMARY*\n"
+        f"📊 <b>DAILY TRADE SUMMARY</b>\n"
         f"Total Signals: {total}\n"
         f"Strategies:\n{strat_text}\n"
         f"Daily P&L: {daily_trades['pnl']:+.0f} pts"

@@ -77,12 +77,12 @@ def update_live_exits(df):
                 trade["crossed_levels"] = crossed_levels
                 pnl_pts = move_r * sl_dist
                 msg = (
-                    f"📈 *{label} CROSSED!*\n"
+                    f"📈 <b>{label} CROSSED!</b>\n"
                     f"Strategy: {trade['strategy']} {trade_type}\n"
                     f"Entry: {entry:.0f} → Now: {last_price:.0f}\n"
                     f"P&L: +{pnl_pts:.0f} pts ({move_r:.1f}R)\n"
                     f"Trail SL: {trade['stoploss']:.0f}\n"
-                    f"_Letting winner run..._"
+                    f"<i>Letting winner run...</i>"
                 )
                 send_telegram_alert(msg)
                 print(f"  {label} CROSSED: {trade['strategy']} {trade_type} at {last_price:.0f} ({move_r:.1f}R)")
@@ -100,10 +100,10 @@ def update_live_exits(df):
                 trade["stoploss"] = new_sl
                 trade["breakeven"] = True
                 msg = (
-                    f"🔒 *BREAKEVEN*\n"
+                    f"🔒 <b>BREAKEVEN</b>\n"
                     f"{trade['strategy']} {trade_type}\n"
                     f"SL moved to {new_sl:.0f} (entry+2)\n"
-                    f"_Risk eliminated_"
+                    f"<i>Risk eliminated</i>"
                 )
                 send_telegram_alert(msg)
                 print(f"  TRAIL: {trade['strategy']} {trade_type} SL → BREAKEVEN ({new_sl:.0f})")
@@ -198,12 +198,12 @@ def update_live_exits(df):
             elif reversal_signals == 1:
                 # Just warn — don't auto-exit on single signal
                 warn_msg = (
-                    f"⚠️ *TREND WARNING*\n"
+                    f"⚠️ <b>TREND WARNING</b>\n"
                     f"{trade['strategy']} {trade_type}\n"
                     f"Signal: {reversal_reasons[0]}\n"
                     f"Current P&L: {move:+.0f} pts ({move_r:+.1f}R)\n"
                     f"Trail SL at: {trade['stoploss']:.0f}\n"
-                    f"_Watch closely — consider manual exit_"
+                    f"<i>Watch closely — consider manual exit</i>"
                 )
                 # Only warn once per signal type
                 warned = trade.get("warned_signals", set())

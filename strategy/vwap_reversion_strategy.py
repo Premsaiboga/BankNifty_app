@@ -19,7 +19,7 @@ from ml.features import extract_features
 
 
 class VWAPReversionStrategy:
-    def __init__(self, rr=2.0, max_trades_per_day=3):
+    def __init__(self, rr=2.0, max_trades_per_day=4):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -50,24 +50,24 @@ class VWAPReversionStrategy:
             vwap = curr["vwap"]
 
             # ===== BUY: Double-candle reversal from below VWAP =====
-            # Candle -2: was significantly below VWAP (the deviation)
-            prev2_below = (prev2["vwap"] - prev2["close"]) > 1.0 * atr
+            # Candle -2: was below VWAP (deviation > 0.7 ATR)
+            prev2_below = (prev2["vwap"] - prev2["close"]) > 0.7 * atr
 
             # Candle -1: first bullish reversal
             prev_bullish = (
                 prev["close"] > prev["open"]
-                and prev["body_ratio"] > 0.35
+                and prev["body_ratio"] > 0.30
                 and prev["close"] < vwap  # Still below VWAP (room to run)
             )
 
             # Current: SECOND bullish confirmation
             curr_bullish = (
                 curr["close"] > curr["open"]
-                and curr["body_ratio"] > 0.40
+                and curr["body_ratio"] > 0.30
                 and curr["close"] > prev["close"]  # Higher close
-                and curr["close"] < vwap + 0.3 * atr  # Not already past VWAP
-                and curr["rsi_14"] > 35
-                and curr["rsi_14"] < 60  # RSI recovering but not overbought
+                and curr["close"] < vwap + 0.5 * atr  # Not already past VWAP
+                and curr["rsi_14"] > 30
+                and curr["rsi_14"] < 65
             )
 
             if prev2_below and prev_bullish and curr_bullish:
@@ -99,21 +99,21 @@ class VWAPReversionStrategy:
                     trades_per_day[date] += 1
 
             # ===== SELL: Double-candle reversal from above VWAP =====
-            prev2_above = (prev2["close"] - prev2["vwap"]) > 1.0 * atr
+            prev2_above = (prev2["close"] - prev2["vwap"]) > 0.7 * atr
 
             prev_bearish = (
                 prev["close"] < prev["open"]
-                and prev["body_ratio"] > 0.35
+                and prev["body_ratio"] > 0.30
                 and prev["close"] > vwap
             )
 
             curr_bearish = (
                 curr["close"] < curr["open"]
-                and curr["body_ratio"] > 0.40
+                and curr["body_ratio"] > 0.30
                 and curr["close"] < prev["close"]
-                and curr["close"] > vwap - 0.3 * atr
-                and curr["rsi_14"] < 65
-                and curr["rsi_14"] > 40
+                and curr["close"] > vwap - 0.5 * atr
+                and curr["rsi_14"] < 70
+                and curr["rsi_14"] > 35
             )
 
             if prev2_above and prev_bearish and curr_bearish:

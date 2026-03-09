@@ -20,7 +20,7 @@ from ml.features import extract_features
 
 
 class EMAScalpStrategy:
-    def __init__(self, rr=2.0, max_trades_per_day=2):
+    def __init__(self, rr=2.0, max_trades_per_day=3):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -54,8 +54,8 @@ class EMAScalpStrategy:
             consolidation = curr.get("consolidation_ratio", 2.0)
             ema_spread_abs = abs(curr.get("ema_spread", 0.0))
 
-            # Skip choppy markets
-            if consolidation < 1.3:
+            # Skip very choppy markets
+            if consolidation < 1.1:
                 continue
 
             # Reset on new day
@@ -89,7 +89,7 @@ class EMAScalpStrategy:
                 continue
 
             candles_since = i - pending_cross["cross_idx"]
-            if candles_since > 5:  # Expire after 25 min
+            if candles_since > 8:  # Expire after 40 min
                 pending_cross = None
                 continue
 
@@ -107,11 +107,10 @@ class EMAScalpStrategy:
                 # Bounce: current candle is bullish, holds above EMA
                 bounced = (
                     curr["close"] > curr["open"]
-                    and curr["body_ratio"] > 0.40
+                    and curr["body_ratio"] > 0.30
                     and curr["close"] > ema_9
-                    and curr["low"] >= ema_9 - 0.3 * atr  # Didn't break far below EMA
-                    and curr["rsi_14"] > 50
-                    and curr["close"] > curr.get("vwap", curr["close"])
+                    and curr["low"] >= ema_9 - 0.5 * atr
+                    and curr["rsi_14"] > 45
                 )
 
                 if pulled_back and bounced:
@@ -149,11 +148,10 @@ class EMAScalpStrategy:
 
                 bounced = (
                     curr["close"] < curr["open"]
-                    and curr["body_ratio"] > 0.40
+                    and curr["body_ratio"] > 0.30
                     and curr["close"] < ema_9
-                    and curr["high"] <= ema_9 + 0.3 * atr
-                    and curr["rsi_14"] < 50
-                    and curr["close"] < curr.get("vwap", curr["close"])
+                    and curr["high"] <= ema_9 + 0.5 * atr
+                    and curr["rsi_14"] < 55
                 )
 
                 if pulled_back and bounced:

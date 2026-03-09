@@ -19,7 +19,7 @@ from ml.features import extract_features
 
 
 class PivotScalpStrategy:
-    def __init__(self, rr=2.0, max_trades_per_day=2):
+    def __init__(self, rr=2.0, max_trades_per_day=3):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -51,26 +51,26 @@ class PivotScalpStrategy:
             atr = curr["atr"]
             s1, s2 = curr["s1"], curr["s2"]
             r1, r2 = curr["r1"], curr["r2"]
-            zone_buffer = 0.4 * atr
+            zone_buffer = 0.5 * atr
 
             # ===== BUY: Double-candle bullish reversal at S1 =====
-            # Candle -2: touched S1 zone (the initial test)
+            # Candle -2: touched S1 zone
             prev2_in_s1 = prev2["low"] <= s1 + zone_buffer
 
             # Candle -1: first bullish confirmation
             prev_bullish = (
                 prev["close"] > prev["open"]
-                and prev["body_ratio"] > 0.35
-                and prev["low"] <= s1 + zone_buffer  # Still near zone
+                and prev["body_ratio"] > 0.25
+                and prev["low"] <= s1 + zone_buffer
             )
 
-            # Current candle: SECOND bullish confirmation (enter here)
+            # Current candle: SECOND bullish confirmation
             curr_bullish = (
                 curr["close"] > curr["open"]
-                and curr["body_ratio"] > 0.40
-                and curr["close"] > prev["close"]  # Higher close = momentum building
-                and curr["rsi_14"] > 35  # Not deeply oversold (recovery underway)
-                and curr["rsi_14"] < 65  # Not already overbought
+                and curr["body_ratio"] > 0.30
+                and curr["close"] > prev["close"]
+                and curr["rsi_14"] > 30
+                and curr["rsi_14"] < 70
             )
 
             if prev2_in_s1 and prev_bullish and curr_bullish:
@@ -107,16 +107,16 @@ class PivotScalpStrategy:
 
             prev_bearish = (
                 prev["close"] < prev["open"]
-                and prev["body_ratio"] > 0.35
+                and prev["body_ratio"] > 0.25
                 and prev["high"] >= r1 - zone_buffer
             )
 
             curr_bearish = (
                 curr["close"] < curr["open"]
-                and curr["body_ratio"] > 0.40
-                and curr["close"] < prev["close"]  # Lower close = momentum building
-                and curr["rsi_14"] < 65
-                and curr["rsi_14"] > 35
+                and curr["body_ratio"] > 0.30
+                and curr["close"] < prev["close"]
+                and curr["rsi_14"] < 70
+                and curr["rsi_14"] > 30
             )
 
             if prev2_in_r1 and prev_bearish and curr_bearish:
