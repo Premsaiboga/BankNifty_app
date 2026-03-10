@@ -53,27 +53,33 @@ class PivotScalpStrategy:
             r1, r2 = curr["r1"], curr["r2"]
             zone_buffer = 0.5 * atr
 
-            # ===== BUY: Double-candle bullish reversal at S1 =====
-            # Candle -2: touched S1 zone
+            # ===== BUY: Bullish reversal at S1 =====
             prev2_in_s1 = prev2["low"] <= s1 + zone_buffer
 
-            # Candle -1: first bullish confirmation
             prev_bullish = (
                 prev["close"] > prev["open"]
-                and prev["body_ratio"] > 0.25
+                and prev["body_ratio"] > 0.20
                 and prev["low"] <= s1 + zone_buffer
             )
 
-            # Current candle: SECOND bullish confirmation
             curr_bullish = (
                 curr["close"] > curr["open"]
-                and curr["body_ratio"] > 0.30
+                and curr["body_ratio"] > 0.25
                 and curr["close"] > prev["close"]
-                and curr["rsi_14"] > 30
-                and curr["rsi_14"] < 70
+                and curr["rsi_14"] > 25
+                and curr["rsi_14"] < 75
             )
 
-            if prev2_in_s1 and prev_bullish and curr_bullish:
+            # Path B: Single strong bullish candle bouncing off S1
+            strong_buy = (
+                curr["low"] <= s1 + zone_buffer
+                and curr["close"] > curr["open"]
+                and curr["body_ratio"] > 0.45
+                and curr["rsi_14"] > 25
+                and curr["rsi_14"] < 75
+            )
+
+            if (prev2_in_s1 and prev_bullish and curr_bullish) or strong_buy:
                 entry = curr["close"]
                 # SL below the 2-candle low (structure-based)
                 sl = min(prev2["low"], prev["low"], curr["low"]) - 0.1 * atr
@@ -102,24 +108,33 @@ class PivotScalpStrategy:
                     })
                     trades_per_day[date] += 1
 
-            # ===== SELL: Double-candle bearish reversal at R1 =====
+            # ===== SELL: Bearish reversal at R1 =====
             prev2_in_r1 = prev2["high"] >= r1 - zone_buffer
 
             prev_bearish = (
                 prev["close"] < prev["open"]
-                and prev["body_ratio"] > 0.25
+                and prev["body_ratio"] > 0.20
                 and prev["high"] >= r1 - zone_buffer
             )
 
             curr_bearish = (
                 curr["close"] < curr["open"]
-                and curr["body_ratio"] > 0.30
+                and curr["body_ratio"] > 0.25
                 and curr["close"] < prev["close"]
-                and curr["rsi_14"] < 70
-                and curr["rsi_14"] > 30
+                and curr["rsi_14"] < 75
+                and curr["rsi_14"] > 25
             )
 
-            if prev2_in_r1 and prev_bearish and curr_bearish:
+            # Path B: Single strong bearish candle at R1
+            strong_sell = (
+                curr["high"] >= r1 - zone_buffer
+                and curr["close"] < curr["open"]
+                and curr["body_ratio"] > 0.45
+                and curr["rsi_14"] < 75
+                and curr["rsi_14"] > 25
+            )
+
+            if (prev2_in_r1 and prev_bearish and curr_bearish) or strong_sell:
                 entry = curr["close"]
                 sl = max(prev2["high"], prev["high"], curr["high"]) + 0.1 * atr
                 sl_dist = sl - entry

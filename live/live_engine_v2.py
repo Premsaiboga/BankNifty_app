@@ -225,9 +225,9 @@ def process_trade_v2(trade: dict):
     if ai_result["decision"] != "TAKE":
         return None
 
-    # Expiry day: only HIGH confidence
-    if trade.get("is_expiry") and ai_result["confidence"] not in ("HIGH",):
-        print(f"  -> Expiry day: only HIGH confidence allowed (got {ai_result['confidence']})")
+    # Expiry day: allow MEDIUM + HIGH (same as regular days)
+    if trade.get("is_expiry") and ai_result["confidence"] not in ("HIGH", "MEDIUM"):
+        print(f"  -> Expiry day: only MEDIUM+ confidence allowed (got {ai_result['confidence']})")
         return None
 
     # Correlated signal warning

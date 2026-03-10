@@ -41,13 +41,13 @@ def _load_model():
     scaler = bundle["scaler"]
     FEATURES = bundle["features"]
 
-    # Use model's own optimal thresholds
+    # Use lower of model's thresholds and our defaults (never raise above 0.35)
     global STRATEGY_THRESHOLDS
     model_thresholds = bundle.get("optimal_thresholds", {})
     if model_thresholds:
         for strat, thresh in model_thresholds.items():
             if strat in STRATEGY_THRESHOLDS:
-                STRATEGY_THRESHOLDS[strat] = thresh
+                STRATEGY_THRESHOLDS[strat] = min(float(thresh), STRATEGY_THRESHOLDS[strat])
 
     print(f"Loaded model_v2 ({bundle.get('model_type', 'unknown')})")
     print(f"Thresholds: {STRATEGY_THRESHOLDS}")
@@ -59,10 +59,10 @@ def _load_model():
 # 4 strategies enabled (MOMENTUM_SURGE disabled — 37% OOS WR).
 # Model will override with optimal thresholds from training.
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.45,
-    "PIVOT_SCALP": 0.45,
-    "VWAP_REVERSION": 0.45,
-    "EMA_SCALP": 0.45,
+    "ORB": 0.35,
+    "PIVOT_SCALP": 0.35,
+    "VWAP_REVERSION": 0.35,
+    "EMA_SCALP": 0.35,
 }
 
 # Default for unknown strategies
@@ -126,9 +126,10 @@ def ai_filter_v2(trade: dict) -> dict:
     else:
         confidence = "LOW"
 
-    # ONLY take HIGH confidence trades (86.7% profitable in backtest)
-    # MEDIUM/LOW confidence trades have negative expectancy
-    decision = "TAKE" if confidence == "HIGH" else "SKIP"
+    # Take MEDIUM + HIGH confidence trades
+    # HIGH = prob >= threshold + 0.15, MEDIUM = prob >= threshold + 0.05
+    # LOW = prob < threshold + 0.05 → skip
+    decision = "TAKE" if confidence in ("HIGH", "MEDIUM") else "SKIP"
 
     return {
         "decision": decision,

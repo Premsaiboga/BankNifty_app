@@ -49,28 +49,37 @@ class VWAPReversionStrategy:
             atr = curr["atr"]
             vwap = curr["vwap"]
 
-            # ===== BUY: Double-candle reversal from below VWAP =====
-            # Candle -2: was below VWAP (deviation > 0.7 ATR)
-            prev2_below = (prev2["vwap"] - prev2["close"]) > 0.7 * atr
+            # ===== BUY: Reversal from below VWAP =====
+            # Path A: Double-candle (prev2 deviated, prev + curr confirm)
+            prev2_below = (prev2["vwap"] - prev2["close"]) > 0.5 * atr
 
-            # Candle -1: first bullish reversal
             prev_bullish = (
                 prev["close"] > prev["open"]
-                and prev["body_ratio"] > 0.30
-                and prev["close"] < vwap  # Still below VWAP (room to run)
+                and prev["body_ratio"] > 0.25
+                and prev["close"] < vwap
             )
 
-            # Current: SECOND bullish confirmation
             curr_bullish = (
                 curr["close"] > curr["open"]
-                and curr["body_ratio"] > 0.30
-                and curr["close"] > prev["close"]  # Higher close
-                and curr["close"] < vwap + 0.5 * atr  # Not already past VWAP
-                and curr["rsi_14"] > 30
-                and curr["rsi_14"] < 65
+                and curr["body_ratio"] > 0.25
+                and curr["close"] > prev["close"]
+                and curr["close"] < vwap + 0.5 * atr
+                and curr["rsi_14"] > 25
+                and curr["rsi_14"] < 70
             )
 
-            if prev2_below and prev_bullish and curr_bullish:
+            # Path B: Single strong candle reversal from below VWAP
+            strong_buy = (
+                (prev["vwap"] - prev["close"]) > 0.5 * atr  # prev was below VWAP
+                and curr["close"] > curr["open"]
+                and curr["body_ratio"] > 0.45
+                and curr["close"] > prev["close"]
+                and curr["close"] < vwap + 0.5 * atr
+                and curr["rsi_14"] > 25
+                and curr["rsi_14"] < 70
+            )
+
+            if (prev2_below and prev_bullish and curr_bullish) or strong_buy:
                 entry = curr["close"]
                 sl = min(prev2["low"], prev["low"], curr["low"]) - 0.1 * atr
                 sl_dist = entry - sl
@@ -98,25 +107,36 @@ class VWAPReversionStrategy:
                     })
                     trades_per_day[date] += 1
 
-            # ===== SELL: Double-candle reversal from above VWAP =====
-            prev2_above = (prev2["close"] - prev2["vwap"]) > 0.7 * atr
+            # ===== SELL: Reversal from above VWAP =====
+            prev2_above = (prev2["close"] - prev2["vwap"]) > 0.5 * atr
 
             prev_bearish = (
                 prev["close"] < prev["open"]
-                and prev["body_ratio"] > 0.30
+                and prev["body_ratio"] > 0.25
                 and prev["close"] > vwap
             )
 
             curr_bearish = (
                 curr["close"] < curr["open"]
-                and curr["body_ratio"] > 0.30
+                and curr["body_ratio"] > 0.25
                 and curr["close"] < prev["close"]
                 and curr["close"] > vwap - 0.5 * atr
-                and curr["rsi_14"] < 70
-                and curr["rsi_14"] > 35
+                and curr["rsi_14"] < 75
+                and curr["rsi_14"] > 30
             )
 
-            if prev2_above and prev_bearish and curr_bearish:
+            # Path B: Single strong bearish candle from above VWAP
+            strong_sell = (
+                (prev["close"] - prev["vwap"]) > 0.5 * atr
+                and curr["close"] < curr["open"]
+                and curr["body_ratio"] > 0.45
+                and curr["close"] < prev["close"]
+                and curr["close"] > vwap - 0.5 * atr
+                and curr["rsi_14"] < 75
+                and curr["rsi_14"] > 30
+            )
+
+            if (prev2_above and prev_bearish and curr_bearish) or strong_sell:
                 entry = curr["close"]
                 sl = max(prev2["high"], prev["high"], curr["high"]) + 0.1 * atr
                 sl_dist = sl - entry

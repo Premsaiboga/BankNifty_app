@@ -5,11 +5,11 @@
 # Strategy-specific AI thresholds (model overrides at load)
 # All 5 strategies re-enabled with V3 pullback entry logic
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.45,
-    "MOMENTUM_SURGE": 0.45,
-    "PIVOT_SCALP": 0.45,
-    "VWAP_REVERSION": 0.45,
-    "EMA_SCALP": 0.45,
+    "ORB": 0.35,
+    "MOMENTUM_SURGE": 0.35,
+    "PIVOT_SCALP": 0.35,
+    "VWAP_REVERSION": 0.35,
+    "EMA_SCALP": 0.35,
 }
 
 # Default risk-reward ratios per strategy (1:2 RR)

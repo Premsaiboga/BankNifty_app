@@ -101,17 +101,28 @@ class EMAScalpStrategy:
                     pending_cross = None
                     continue
 
-                # Pullback: prev candle low touched near EMA 9
-                pulled_back = prev["low"] <= ema_9 + 0.2 * atr
+                # Path A: Pullback to EMA + bounce
+                pulled_back = prev["low"] <= ema_9 + 0.3 * atr
 
-                # Bounce: current candle is bullish, holds above EMA
                 bounced = (
                     curr["close"] > curr["open"]
-                    and curr["body_ratio"] > 0.30
+                    and curr["body_ratio"] > 0.25
                     and curr["close"] > ema_9
                     and curr["low"] >= ema_9 - 0.5 * atr
-                    and curr["rsi_14"] > 45
+                    and curr["rsi_14"] > 40
                 )
+
+                # Path B: Strong single candle near EMA (no pullback needed)
+                strong_candle = (
+                    curr["close"] > curr["open"]
+                    and curr["body_ratio"] > 0.50
+                    and curr["close"] > ema_9
+                    and abs(curr["low"] - ema_9) < 0.5 * atr
+                    and curr["rsi_14"] > 40
+                )
+                if strong_candle:
+                    pulled_back = True
+                    bounced = True
 
                 if pulled_back and bounced:
                     entry = curr["close"]
@@ -144,15 +155,27 @@ class EMAScalpStrategy:
                     pending_cross = None
                     continue
 
-                pulled_back = prev["high"] >= ema_9 - 0.2 * atr
+                pulled_back = prev["high"] >= ema_9 - 0.3 * atr
 
                 bounced = (
                     curr["close"] < curr["open"]
-                    and curr["body_ratio"] > 0.30
+                    and curr["body_ratio"] > 0.25
                     and curr["close"] < ema_9
                     and curr["high"] <= ema_9 + 0.5 * atr
-                    and curr["rsi_14"] < 55
+                    and curr["rsi_14"] < 60
                 )
+
+                # Path B: Strong single bearish candle near EMA
+                strong_candle = (
+                    curr["close"] < curr["open"]
+                    and curr["body_ratio"] > 0.50
+                    and curr["close"] < ema_9
+                    and abs(curr["high"] - ema_9) < 0.5 * atr
+                    and curr["rsi_14"] < 60
+                )
+                if strong_candle:
+                    pulled_back = True
+                    bounced = True
 
                 if pulled_back and bounced:
                     entry = curr["close"]

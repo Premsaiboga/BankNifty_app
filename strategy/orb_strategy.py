@@ -90,14 +90,25 @@ class ORBStrategy:
                 ):
                     prev = group.iloc[idx - 1]
 
-                    # Pullback: prev candle dipped toward OR high, current bounces up
+                    # Path A: Pullback then bounce
                     pulled_back = prev["low"] <= orb_high + 0.5 * atr
                     bounced = (
-                        row["close"] > row["open"]        # Bullish bounce
-                        and row["close"] > orb_high        # Still above OR high
-                        and row["body_ratio"] > 0.30       # Decent body
-                        and row["rsi_14"] > 45             # Momentum intact
+                        row["close"] > row["open"]
+                        and row["close"] > orb_high
+                        and row["body_ratio"] > 0.25
+                        and row["rsi_14"] > 40
                     )
+
+                    # Path B: Strong continuation candle above ORB high
+                    strong_cont = (
+                        row["close"] > row["open"]
+                        and row["close"] > orb_high
+                        and row["body_ratio"] > 0.45
+                        and row["rsi_14"] > 40
+                    )
+                    if strong_cont:
+                        pulled_back = True
+                        bounced = True
 
                     if pulled_back and bounced:
                         entry = row["close"]
@@ -135,14 +146,25 @@ class ORBStrategy:
                 ):
                     prev = group.iloc[idx - 1]
 
-                    # Pullback: prev candle rose toward OR low, current drops
+                    # Path A: Pullback then drop
                     pulled_back = prev["high"] >= orb_low - 0.5 * atr
                     bounced = (
-                        row["close"] < row["open"]        # Bearish bounce
-                        and row["close"] < orb_low         # Still below OR low
-                        and row["body_ratio"] > 0.30
-                        and row["rsi_14"] < 55
+                        row["close"] < row["open"]
+                        and row["close"] < orb_low
+                        and row["body_ratio"] > 0.25
+                        and row["rsi_14"] < 60
                     )
+
+                    # Path B: Strong continuation candle below ORB low
+                    strong_cont = (
+                        row["close"] < row["open"]
+                        and row["close"] < orb_low
+                        and row["body_ratio"] > 0.45
+                        and row["rsi_14"] < 60
+                    )
+                    if strong_cont:
+                        pulled_back = True
+                        bounced = True
 
                     if pulled_back and bounced:
                         entry = row["close"]
