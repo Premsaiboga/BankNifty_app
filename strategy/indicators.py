@@ -54,7 +54,7 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     high_close = (df["high"] - df["close"].shift()).abs()
     low_close = (df["low"] - df["close"].shift()).abs()
     df["tr"] = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df["atr"] = df["tr"].rolling(14).mean()
+    df["atr"] = df["tr"].rolling(14, min_periods=5).mean()
 
     # ========== EMA 9 and 21 ==========
     df["ema_9"] = df["close"].ewm(span=9, adjust=False).mean()
@@ -64,8 +64,8 @@ def calculate_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     delta = df["close"].diff()
     gain = delta.where(delta > 0, 0.0)
     loss = (-delta).where(delta < 0, 0.0)
-    avg_gain = gain.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / 14, min_periods=14, adjust=False).mean()
+    avg_gain = gain.ewm(alpha=1 / 14, min_periods=5, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, min_periods=5, adjust=False).mean()
     rs = avg_gain / (avg_loss + 1e-10)
     df["rsi_14"] = 100 - (100 / (1 + rs))
 

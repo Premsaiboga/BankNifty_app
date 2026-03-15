@@ -332,7 +332,7 @@ def process_5m_candle(c5):
         print(indicators_str)
 
         if pd.isna(atr):
-            print(f"  Waiting for ATR warmup ({n}/15 candles)")
+            print(f"  Waiting for ATR warmup ({n}/6 candles)")
             return
 
         # Check exit manager for active trades

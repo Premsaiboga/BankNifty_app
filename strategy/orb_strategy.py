@@ -21,7 +21,7 @@ from ml.features import extract_features
 
 
 class ORBStrategy:
-    def __init__(self, rr=2.0, max_trades_per_day=2):
+    def __init__(self, rr=2.0, max_trades_per_day=6):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -51,8 +51,8 @@ class ORBStrategy:
             for idx in range(3, len(group)):
                 row = group.iloc[idx]
 
-                # Only trade between 9:30 and 14:00 (tighter window)
-                if row["minutes_from_open"] < 15 or row["minutes_from_open"] > 285:
+                # Only trade between 9:30 and 15:00
+                if row["minutes_from_open"] < 15 or row["minutes_from_open"] > 345:
                     continue
 
                 if pd.isna(row.get("atr")) or row["atr"] < 1:
@@ -83,7 +83,7 @@ class ORBStrategy:
                 # ===== BUY: Pullback after upward breakout =====
                 if (
                     broke_above
-                    and trades_per_day[date]["BUY"] < 1
+                    and trades_per_day[date]["BUY"] < 3
                     and breakout_candle_idx is not None
                     and idx > breakout_candle_idx
                     and idx <= breakout_candle_idx + 8  # Within 40 min of breakout
@@ -139,7 +139,7 @@ class ORBStrategy:
                 # ===== SELL: Pullback after downward breakout =====
                 if (
                     broke_below
-                    and trades_per_day[date]["SELL"] < 1
+                    and trades_per_day[date]["SELL"] < 3
                     and breakout_candle_idx is not None
                     and idx > breakout_candle_idx
                     and idx <= breakout_candle_idx + 8

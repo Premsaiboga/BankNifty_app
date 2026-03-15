@@ -109,6 +109,26 @@ def update_live_exits(df):
                 print(f"  TRAIL: {trade['strategy']} {trade_type} SL → BREAKEVEN ({new_sl:.0f})")
 
         # =========================
+        # INTERMEDIATE TRAIL (> 1.0R profit)
+        # Locks 0.3R profit so T1 winners don't evaporate to breakeven
+        # =========================
+        if sl_dist > 0 and move > 1.0 * sl_dist and move <= 1.5 * sl_dist:
+            if trade_type == "BUY":
+                new_sl = entry + 0.3 * sl_dist
+                if new_sl > trade["stoploss"]:
+                    old_sl = trade["stoploss"]
+                    trade["stoploss"] = new_sl
+                    trade["trailed"] = True
+                    print(f"  TRAIL: {trade['strategy']} {trade_type} SL {old_sl:.0f} → {new_sl:.0f} (locking 0.3R after T1)")
+            else:
+                new_sl = entry - 0.3 * sl_dist
+                if new_sl < trade["stoploss"]:
+                    old_sl = trade["stoploss"]
+                    trade["stoploss"] = new_sl
+                    trade["trailed"] = True
+                    print(f"  TRAIL: {trade['strategy']} {trade_type} SL {old_sl:.0f} → {new_sl:.0f} (locking 0.3R after T1)")
+
+        # =========================
         # DYNAMIC TRAILING (> 1.5R profit)
         # Locks (move - 0.5R): at 2R→1.5R, at 3R→2.5R, at 4R→3.5R
         # =========================

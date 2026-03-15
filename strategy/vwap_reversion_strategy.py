@@ -19,7 +19,7 @@ from ml.features import extract_features
 
 
 class VWAPReversionStrategy:
-    def __init__(self, rr=2.0, max_trades_per_day=4):
+    def __init__(self, rr=2.0, max_trades_per_day=10):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -37,8 +37,8 @@ class VWAPReversionStrategy:
             if trades_per_day[date] >= self.max_trades_per_day:
                 continue
 
-            # Only trade 9:45 AM - 2:30 PM (skip first 30 min for VWAP to stabilize)
-            if curr["minutes_from_open"] < 30 or curr["minutes_from_open"] > 315:
+            # Only trade 9:30 AM - 3:00 PM (skip first 15 min for VWAP to stabilize)
+            if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 345:
                 continue
 
             if pd.isna(curr.get("atr")) or curr["atr"] < 1:

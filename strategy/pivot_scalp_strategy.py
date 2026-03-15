@@ -19,7 +19,7 @@ from ml.features import extract_features
 
 
 class PivotScalpStrategy:
-    def __init__(self, rr=2.0, max_trades_per_day=3):
+    def __init__(self, rr=2.0, max_trades_per_day=10):
         self.rr = rr
         self.max_trades_per_day = max_trades_per_day
 
@@ -37,8 +37,8 @@ class PivotScalpStrategy:
             if trades_per_day[date] >= self.max_trades_per_day:
                 continue
 
-            # Only trade 9:30 AM - 2:30 PM
-            if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 315:
+            # Only trade 9:30 AM - 3:00 PM
+            if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 345:
                 continue
 
             if pd.isna(curr.get("atr")) or curr["atr"] < 1:

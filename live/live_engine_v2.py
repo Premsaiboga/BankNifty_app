@@ -35,8 +35,8 @@ def _now_ist():
 # =========================
 # CONFIG
 # =========================
-MAX_TRADES_PER_DAY = 5
-MAX_TRADES_EXPIRY = 3          # Fewer trades on expiry day
+MAX_TRADES_PER_DAY = 15        # Paper trading: more trades = more data
+MAX_TRADES_EXPIRY = 10         # Paper trading: allow more on expiry too
 MAX_DAILY_LOSS = 3000          # Stop trading after this loss in a day
 
 
