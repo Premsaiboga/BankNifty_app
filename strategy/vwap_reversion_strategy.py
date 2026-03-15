@@ -68,11 +68,11 @@ class VWAPReversionStrategy:
                 and curr["rsi_14"] < 70
             )
 
-            # Path B: Single strong candle reversal from below VWAP
+            # Path B: Single candle reversal from below VWAP (FAST — 5min earlier)
             strong_buy = (
                 (prev["vwap"] - prev["close"]) > 0.5 * atr  # prev was below VWAP
                 and curr["close"] > curr["open"]
-                and curr["body_ratio"] > 0.45
+                and curr["body_ratio"] > 0.30
                 and curr["close"] > prev["close"]
                 and curr["close"] < vwap + 0.5 * atr
                 and curr["rsi_14"] > 25
@@ -125,11 +125,11 @@ class VWAPReversionStrategy:
                 and curr["rsi_14"] > 30
             )
 
-            # Path B: Single strong bearish candle from above VWAP
+            # Path B: Single bearish candle from above VWAP (FAST — 5min earlier)
             strong_sell = (
                 (prev["close"] - prev["vwap"]) > 0.5 * atr
                 and curr["close"] < curr["open"]
-                and curr["body_ratio"] > 0.45
+                and curr["body_ratio"] > 0.30
                 and curr["close"] < prev["close"]
                 and curr["close"] > vwap - 0.5 * atr
                 and curr["rsi_14"] < 75

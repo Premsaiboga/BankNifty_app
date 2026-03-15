@@ -70,11 +70,11 @@ class PivotScalpStrategy:
                 and curr["rsi_14"] < 75
             )
 
-            # Path B: Single strong bullish candle bouncing off S1
+            # Path B: Single bullish candle bouncing off S1 (FAST — 5min earlier)
             strong_buy = (
                 curr["low"] <= s1 + zone_buffer
                 and curr["close"] > curr["open"]
-                and curr["body_ratio"] > 0.45
+                and curr["body_ratio"] > 0.30
                 and curr["rsi_14"] > 25
                 and curr["rsi_14"] < 75
             )
@@ -125,11 +125,11 @@ class PivotScalpStrategy:
                 and curr["rsi_14"] > 25
             )
 
-            # Path B: Single strong bearish candle at R1
+            # Path B: Single bearish candle at R1 (FAST — 5min earlier)
             strong_sell = (
                 curr["high"] >= r1 - zone_buffer
                 and curr["close"] < curr["open"]
-                and curr["body_ratio"] > 0.45
+                and curr["body_ratio"] > 0.30
                 and curr["rsi_14"] < 75
                 and curr["rsi_14"] > 25
             )

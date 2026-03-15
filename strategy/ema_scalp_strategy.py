@@ -68,6 +68,28 @@ class EMAScalpStrategy:
 
             if ema_crossed_up and pending_cross is None:
                 if ema_spread_abs > 0.1:
+                    # Path C: FAST entry on crossover candle itself if strong
+                    if (curr["close"] > curr["open"]
+                            and curr["body_ratio"] > 0.35
+                            and curr["rsi_14"] > 40):
+                        entry = curr["close"]
+                        sl = min(curr["low"], prev["low"]) - 0.1 * atr
+                        sl_dist = entry - sl
+                        if sl_dist < 0.5 * atr:
+                            sl = entry - 0.5 * atr
+                            sl_dist = entry - sl
+                        if sl_dist > 0 and sl_dist <= 2.0 * atr:
+                            target = entry + sl_dist * self.rr
+                            features = extract_features(curr, "EMA_SCALP", entry, sl, self.rr)
+                            trades.append({
+                                "strategy": "EMA_SCALP", "type": "BUY",
+                                "entry": round(entry, 2), "stoploss": round(sl, 2),
+                                "target": round(target, 2), "rr": self.rr,
+                                "time": curr["datetime"], "features": features,
+                            })
+                            trades_per_day[date] += 1
+                            continue
+                    # Otherwise wait for pullback
                     pending_cross = {
                         "type": "BUY",
                         "cross_idx": i,
@@ -77,6 +99,27 @@ class EMAScalpStrategy:
 
             if ema_crossed_down and pending_cross is None:
                 if ema_spread_abs > 0.1:
+                    # Path C: FAST entry on crossover candle itself if strong
+                    if (curr["close"] < curr["open"]
+                            and curr["body_ratio"] > 0.35
+                            and curr["rsi_14"] < 60):
+                        entry = curr["close"]
+                        sl = max(curr["high"], prev["high"]) + 0.1 * atr
+                        sl_dist = sl - entry
+                        if sl_dist < 0.5 * atr:
+                            sl = entry + 0.5 * atr
+                            sl_dist = sl - entry
+                        if sl_dist > 0 and sl_dist <= 2.0 * atr:
+                            target = entry - sl_dist * self.rr
+                            features = extract_features(curr, "EMA_SCALP", entry, sl, self.rr)
+                            trades.append({
+                                "strategy": "EMA_SCALP", "type": "SELL",
+                                "entry": round(entry, 2), "stoploss": round(sl, 2),
+                                "target": round(target, 2), "rr": self.rr,
+                                "time": curr["datetime"], "features": features,
+                            })
+                            trades_per_day[date] += 1
+                            continue
                     pending_cross = {
                         "type": "SELL",
                         "cross_idx": i,
@@ -112,10 +155,10 @@ class EMAScalpStrategy:
                     and curr["rsi_14"] > 40
                 )
 
-                # Path B: Strong single candle near EMA (no pullback needed)
+                # Path B: Single candle near EMA (FAST — no pullback needed)
                 strong_candle = (
                     curr["close"] > curr["open"]
-                    and curr["body_ratio"] > 0.50
+                    and curr["body_ratio"] > 0.35
                     and curr["close"] > ema_9
                     and abs(curr["low"] - ema_9) < 0.5 * atr
                     and curr["rsi_14"] > 40
@@ -165,10 +208,10 @@ class EMAScalpStrategy:
                     and curr["rsi_14"] < 60
                 )
 
-                # Path B: Strong single bearish candle near EMA
+                # Path B: Single bearish candle near EMA (FAST)
                 strong_candle = (
                     curr["close"] < curr["open"]
-                    and curr["body_ratio"] > 0.50
+                    and curr["body_ratio"] > 0.35
                     and curr["close"] < ema_9
                     and abs(curr["high"] - ema_9) < 0.5 * atr
                     and curr["rsi_14"] < 60

@@ -67,17 +67,55 @@ class ORBStrategy:
                 if consolidation < 1.0:
                     continue
 
-                # ===== DETECT BREAKOUT (don't trade yet, just record) =====
+                # ===== DETECT BREAKOUT =====
                 if not broke_above and row["close"] > orb_high + 0.2 * atr:
-                    if row["close"] > row["open"] and row["body_ratio"] > 0.40:
+                    if row["close"] > row["open"] and row["body_ratio"] > 0.35:
                         broke_above = True
                         breakout_candle_idx = idx
+                        # FAST PATH: Enter on breakout candle if strong enough
+                        if row["body_ratio"] > 0.40 and row["rsi_14"] > 40 and trades_per_day[date]["BUY"] < 3:
+                            prev_row = group.iloc[idx - 1] if idx > 0 else row
+                            entry = row["close"]
+                            sl = min(row["low"], prev_row["low"]) - 0.1 * atr
+                            sl_dist = entry - sl
+                            if sl_dist < 0.5 * atr:
+                                sl = entry - 0.5 * atr
+                                sl_dist = entry - sl
+                            if sl_dist > 0 and sl_dist <= 2.5 * atr:
+                                target = entry + sl_dist * self.rr
+                                features = extract_features(row, "ORB", entry, sl, self.rr)
+                                trades.append({
+                                    "strategy": "ORB", "type": "BUY",
+                                    "entry": round(entry, 2), "stoploss": round(sl, 2),
+                                    "target": round(target, 2), "rr": self.rr,
+                                    "time": row["datetime"], "features": features,
+                                })
+                                trades_per_day[date]["BUY"] += 1
                         continue
 
                 if not broke_below and row["close"] < orb_low - 0.2 * atr:
-                    if row["close"] < row["open"] and row["body_ratio"] > 0.40:
+                    if row["close"] < row["open"] and row["body_ratio"] > 0.35:
                         broke_below = True
                         breakout_candle_idx = idx
+                        # FAST PATH: Enter on breakout candle if strong enough
+                        if row["body_ratio"] > 0.40 and row["rsi_14"] < 60 and trades_per_day[date]["SELL"] < 3:
+                            prev_row = group.iloc[idx - 1] if idx > 0 else row
+                            entry = row["close"]
+                            sl = max(row["high"], prev_row["high"]) + 0.1 * atr
+                            sl_dist = sl - entry
+                            if sl_dist < 0.5 * atr:
+                                sl = entry + 0.5 * atr
+                                sl_dist = sl - entry
+                            if sl_dist > 0 and sl_dist <= 2.5 * atr:
+                                target = entry - sl_dist * self.rr
+                                features = extract_features(row, "ORB", entry, sl, self.rr)
+                                trades.append({
+                                    "strategy": "ORB", "type": "SELL",
+                                    "entry": round(entry, 2), "stoploss": round(sl, 2),
+                                    "target": round(target, 2), "rr": self.rr,
+                                    "time": row["datetime"], "features": features,
+                                })
+                                trades_per_day[date]["SELL"] += 1
                         continue
 
                 # ===== BUY: Pullback after upward breakout =====
@@ -99,11 +137,11 @@ class ORBStrategy:
                         and row["rsi_14"] > 40
                     )
 
-                    # Path B: Strong continuation candle above ORB high
+                    # Path B: Continuation candle above ORB high (FAST)
                     strong_cont = (
                         row["close"] > row["open"]
                         and row["close"] > orb_high
-                        and row["body_ratio"] > 0.45
+                        and row["body_ratio"] > 0.30
                         and row["rsi_14"] > 40
                     )
                     if strong_cont:
@@ -155,11 +193,11 @@ class ORBStrategy:
                         and row["rsi_14"] < 60
                     )
 
-                    # Path B: Strong continuation candle below ORB low
+                    # Path B: Continuation candle below ORB low (FAST)
                     strong_cont = (
                         row["close"] < row["open"]
                         and row["close"] < orb_low
-                        and row["body_ratio"] > 0.45
+                        and row["body_ratio"] > 0.30
                         and row["rsi_14"] < 60
                     )
                     if strong_cont:
