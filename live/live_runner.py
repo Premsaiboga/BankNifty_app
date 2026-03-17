@@ -385,6 +385,20 @@ def process_5m_candle(c5):
                             except Exception:
                                 pass  # Don't block trades if liquidity check fails
 
+                            # === BRAIN FILTER 3: No duplicate trades ===
+                            # Block if same strategy + same direction already active
+                            from brain.live_exit_manager import active_trades
+                            duplicate = False
+                            for _k, _t in active_trades.items():
+                                if (_t["strategy"] == trade["strategy"]
+                                        and _t["type"] == trade["type"]):
+                                    duplicate = True
+                                    break
+                            if duplicate:
+                                print(f"    -> SKIPPED (already have active "
+                                      f"{trade['strategy']} {trade['type']})")
+                                continue
+
                             # === Mark expiry day ===
                             if expiry_day:
                                 trade["is_expiry"] = True
