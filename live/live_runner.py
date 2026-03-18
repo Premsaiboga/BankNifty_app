@@ -387,7 +387,6 @@ def process_5m_candle(c5):
 
                             # === BRAIN FILTER 3: No duplicate trades ===
                             # Block if same strategy + same direction already active
-                            from brain.live_exit_manager import active_trades
                             duplicate = False
                             for _k, _t in active_trades.items():
                                 if (_t["strategy"] == trade["strategy"]
