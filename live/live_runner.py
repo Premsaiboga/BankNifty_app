@@ -398,9 +398,10 @@ def process_5m_candle(c5):
                                       f"{trade['strategy']} {trade['type']})")
                                 continue
 
-                            # === Mark expiry day ===
+                            # === Mark context ===
                             if expiry_day:
                                 trade["is_expiry"] = True
+                            trade["regime"] = market_regime
 
                             # Process through V2 engine (AI filter + telegram)
                             result = process_trade_v2(trade)

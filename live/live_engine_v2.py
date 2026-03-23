@@ -100,7 +100,8 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
         f"  T4 (1:4) : {t4:.1f}\n\n"
         f"<b>AI Prob</b>  : {ai_result['probability']}\n"
         f"<b>Time</b>     : {now.strftime('%I:%M %p')}\n\n"
-        f"<i>Trail: BE at 0.8R, dynamic trail at 1.5R+</i>"
+        f"<i>Trail: BE at 0.8R, dynamic trail at 1.5R+</i>\n"
+        f"<i>Regime: {trade.get('regime', 'N/A')}</i>"
     )
 
     return msg
@@ -217,17 +218,30 @@ def process_trade_v2(trade: dict):
     # AI Filter
     ai_result = ai_filter_v2(trade)
 
+    regime = trade.get("regime", "RANGE")
     status = f"[{trade['strategy']}] {trade['type']} @ {trade['entry']:.0f}"
     status += f" | AI={ai_result['probability']:.0%} ({ai_result['confidence']})"
-    status += f" | {ai_result['decision']}"
+    status += f" | {ai_result['decision']} | regime={regime}"
     print(status)
 
     if ai_result["decision"] != "TAKE":
         return None
 
-    # Expiry day: allow MEDIUM + HIGH (same as regular days)
-    if trade.get("is_expiry") and ai_result["confidence"] not in ("HIGH", "MEDIUM"):
-        print(f"  -> Expiry day: only MEDIUM+ confidence allowed (got {ai_result['confidence']})")
+    # === REGIME-AWARE FILTERING ===
+    # TREND: take MEDIUM + HIGH (normal behavior)
+    # RANGE: take only HIGH confidence (skip borderline trades)
+    # CHOPPY: skip ALL — sideways chop = false signals
+    if regime == "CHOPPY":
+        print(f"  -> SKIPPED: CHOPPY market — too many false signals")
+        return None
+
+    if regime == "RANGE" and ai_result["confidence"] != "HIGH":
+        print(f"  -> SKIPPED: RANGE market — need HIGH confidence (got {ai_result['confidence']})")
+        return None
+
+    # Expiry day in RANGE: extra caution
+    if trade.get("is_expiry") and regime != "TREND" and ai_result["confidence"] != "HIGH":
+        print(f"  -> SKIPPED: Expiry + non-trend — need HIGH confidence (got {ai_result['confidence']})")
         return None
 
     # Correlated signal warning
