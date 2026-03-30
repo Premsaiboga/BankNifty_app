@@ -9,11 +9,11 @@ def ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
 
-# ---------------- BIAS DETECTION ----------------
+# ---------------- SHORT-TERM BIAS (10 candles = 50 min) ----------------
 def detect_bias(df_5m):
     """
-    Detect market bias from 5m candles.
-    Uses EMA 9/21, price structure, and price vs VWAP.
+    Short-term bias from recent 5m candles.
+    Uses EMA 9/21, price structure (10 candles), and price vs VWAP.
 
     Returns:
         bias: BUY / SELL / NEUTRAL
@@ -66,11 +66,130 @@ def detect_bias(df_5m):
         return "NEUTRAL", score
 
 
+# ---------------- MACRO BIAS (50 candles = 4+ hours) ----------------
+def detect_macro_bias(df_5m):
+    """
+    Longer-term macro bias — detects multi-hour trends that short-term
+    bias misses. This prevents buying dips in a strong downtrend or
+    selling rallies in a strong uptrend.
+
+    Uses:
+    - EMA 21/50 relationship (longer EMAs = bigger trend)
+    - Price structure over 50 candles (~4 hours)
+    - Percentage of bearish/bullish candles in last 30 candles
+    - Higher high / lower low structure
+
+    Returns:
+        macro_bias: BUY / SELL / NEUTRAL
+        score: integer (-5 to +5)
+    """
+
+    if df_5m is None or len(df_5m) < 50:
+        return "NEUTRAL", 0
+
+    required_cols = {"close", "high", "low", "open"}
+    if not required_cols.issubset(df_5m.columns):
+        return "NEUTRAL", 0
+
+    close = df_5m["close"]
+    high = df_5m["high"]
+    low = df_5m["low"]
+    opn = df_5m["open"]
+
+    score = 0
+
+    # ---------- 1. EMA 21/50 trend ----------
+    ema21 = ema(close, 21)
+    ema50 = ema(close, 50)
+
+    if ema21.iloc[-1] > ema50.iloc[-1]:
+        score += 1
+    else:
+        score -= 1
+
+    # EMA slope: is EMA50 rising or falling?
+    ema50_slope = ema50.iloc[-1] - ema50.iloc[-5] if len(ema50) >= 5 else 0
+    atr_approx = (high - low).tail(14).mean()
+    if atr_approx > 0:
+        if ema50_slope > 0.5 * atr_approx:
+            score += 1
+        elif ema50_slope < -0.5 * atr_approx:
+            score -= 1
+
+    # ---------- 2. Price structure over 50 candles ----------
+    price_change = close.iloc[-1] - close.iloc[-50]
+    if atr_approx > 0:
+        # Strong move = > 3x ATR over 4 hours
+        if price_change > 3 * atr_approx:
+            score += 1
+        elif price_change < -3 * atr_approx:
+            score -= 1
+
+    # ---------- 3. Bearish/Bullish candle ratio (last 30 candles) ----------
+    recent_30 = df_5m.iloc[-30:]
+    bullish = (recent_30["close"] > recent_30["open"]).sum()
+    bearish = (recent_30["close"] < recent_30["open"]).sum()
+    total = bullish + bearish
+    if total > 0:
+        bull_pct = bullish / total
+        if bull_pct > 0.6:
+            score += 1
+        elif bull_pct < 0.4:
+            score -= 1
+
+    # ---------- 4. Lower lows / Higher highs structure ----------
+    # Check last 5 swing points (every 10 candles)
+    swing_points = []
+    for idx in range(-50, 0, 10):
+        if abs(idx) <= len(close):
+            chunk = df_5m.iloc[idx:idx+10] if idx + 10 <= 0 else df_5m.iloc[idx:]
+            if len(chunk) > 0:
+                swing_points.append({
+                    "high": chunk["high"].max(),
+                    "low": chunk["low"].min(),
+                })
+
+    if len(swing_points) >= 3:
+        # Check for lower highs + lower lows (downtrend)
+        lower_highs = all(
+            swing_points[i]["high"] < swing_points[i-1]["high"]
+            for i in range(1, len(swing_points))
+        )
+        lower_lows = all(
+            swing_points[i]["low"] < swing_points[i-1]["low"]
+            for i in range(1, len(swing_points))
+        )
+
+        # Check for higher highs + higher lows (uptrend)
+        higher_highs = all(
+            swing_points[i]["high"] > swing_points[i-1]["high"]
+            for i in range(1, len(swing_points))
+        )
+        higher_lows = all(
+            swing_points[i]["low"] > swing_points[i-1]["low"]
+            for i in range(1, len(swing_points))
+        )
+
+        if lower_highs and lower_lows:
+            score -= 1
+        elif higher_highs and higher_lows:
+            score += 1
+
+    # ---------- FINAL DECISION ----------
+    # Require score >= 3 or <= -3 for macro bias (stronger conviction)
+    if score >= 3:
+        return "BUY", score
+    elif score <= -3:
+        return "SELL", score
+    else:
+        return "NEUTRAL", score
+
+
 # ---------------- REGIME DETECTION ----------------
 def detect_regime(df_5m):
     """
     Detect market regime from 5m candles.
-    TREND   = strong directional move (> 2x ATR over 10 candles)
+    TREND   = strong directional move (> 1.5x ATR over 20 candles)
     CHOPPY  = many direction changes, price going nowhere (sideways chop)
     RANGE   = everything else (calm, low movement)
     """
@@ -85,7 +204,6 @@ def detect_regime(df_5m):
     high = df_5m["high"]
     low = df_5m["low"]
     close = df_5m["close"]
-    opn = df_5m["open"]
 
     # ATR on 5m candles
     atr = (high - low).rolling(14).mean()
@@ -95,23 +213,21 @@ def detect_regime(df_5m):
 
     atr_val = atr.iloc[-1]
 
-    # Recent directional move over 10 candles (50 mins)
-    lookback = min(10, len(close) - 1)
+    # Recent directional move over 20 candles (100 mins) — wider window
+    lookback = min(20, len(close) - 1)
     recent_move = abs(close.iloc[-1] - close.iloc[-lookback])
 
     # --- TREND: Strong directional move ---
-    if recent_move > atr_val * 2.0:
+    if recent_move > atr_val * 1.5:
         return "TREND"
 
     # --- CHOPPY: Many direction reversals in recent candles ---
-    # Count how many times candle direction flips (green→red or red→green)
     n_check = min(10, len(close))
     recent = df_5m.iloc[-n_check:]
     directions = (recent["close"] > recent["open"]).astype(int)
-    flips = (directions.diff().abs().sum())  # number of direction changes
+    flips = (directions.diff().abs().sum())
 
-    # Also check: price range vs sum of candle ranges (efficiency ratio)
-    # Low efficiency = lots of movement but going nowhere = choppy
+    # Efficiency ratio: net move / total candle range
     total_candle_range = (recent["high"] - recent["low"]).sum()
     net_move = abs(recent["close"].iloc[-1] - recent["close"].iloc[0])
     efficiency = net_move / total_candle_range if total_candle_range > 0 else 0

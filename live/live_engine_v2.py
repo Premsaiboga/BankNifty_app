@@ -101,7 +101,7 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
         f"<b>AI Prob</b>  : {ai_result['probability']}\n"
         f"<b>Time</b>     : {now.strftime('%I:%M %p')}\n\n"
         f"<i>Trail: BE at 0.8R, dynamic trail at 1.5R+</i>\n"
-        f"<i>Regime: {trade.get('regime', 'N/A')}</i>"
+        f"<i>Regime: {trade.get('regime', 'N/A')} | Macro: {trade.get('macro_bias', 'N/A')}</i>"
     )
 
     return msg
