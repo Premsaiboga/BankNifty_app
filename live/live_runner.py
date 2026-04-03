@@ -390,17 +390,26 @@ def process_5m_candle(c5):
                             except Exception:
                                 pass  # Don't block trades if liquidity check fails
 
-                            # === BRAIN FILTER 3: No duplicate trades ===
-                            # Block if same strategy + same direction already active
-                            duplicate = False
+                            # === BRAIN FILTER 3: No duplicate/conflicting trades ===
+                            skip_trade = False
                             for _k, _t in active_trades.items():
-                                if (_t["strategy"] == trade["strategy"]
-                                        and _t["type"] == trade["type"]):
-                                    duplicate = True
+                                if _t["strategy"] != trade["strategy"]:
+                                    continue
+                                # Same strategy + same direction = duplicate
+                                if _t["type"] == trade["type"]:
+                                    print(f"    -> SKIPPED (already have active "
+                                          f"{trade['strategy']} {trade['type']})")
+                                    skip_trade = True
                                     break
-                            if duplicate:
-                                print(f"    -> SKIPPED (already have active "
-                                      f"{trade['strategy']} {trade['type']})")
+                                # Same strategy + opposite direction + active at BE
+                                # = trend confirmed, don't fight it
+                                if _t.get("breakeven", False):
+                                    print(f"    -> SKIPPED (active {trade['strategy']} "
+                                          f"{_t['type']} at breakeven — trend confirmed, "
+                                          f"not taking opposite {trade['type']})")
+                                    skip_trade = True
+                                    break
+                            if skip_trade:
                                 continue
 
                             # === Mark context ===
