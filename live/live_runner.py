@@ -38,6 +38,7 @@ import numpy as np
 import time
 import threading
 import os
+import json
 import traceback
 from dotenv import load_dotenv
 from collections import deque
@@ -106,6 +107,84 @@ current_date = None        # Track date for daily reset
 market_bias = "NEUTRAL"
 market_regime = "RANGE"
 market_macro_bias = "NEUTRAL"
+
+# History file — stores last 5 trading days of 5m candles
+HISTORY_FILE = Path(__file__).resolve().parent / "candle_history.json"
+# Max candles to keep: 5 days × 75 candles/day (9:15-15:30 = 6.25hrs × 12 per hr)
+MAX_HISTORY_CANDLES = 375
+
+
+# =========================
+# HISTORY: SAVE / LOAD (5 trading days)
+# =========================
+def save_candle_history():
+    """Save recent candles to disk for next-day macro_bias."""
+    try:
+        # Combine existing history with today's candles
+        history = load_candle_history_raw()
+        today_candles = list(candles_5m_raw)
+
+        # Convert datetimes to strings for JSON
+        for c in today_candles:
+            if isinstance(c.get("datetime"), datetime):
+                c["datetime"] = c["datetime"].isoformat()
+
+        # Append today's candles (avoid duplicates by time)
+        existing_times = {c["datetime"] for c in history}
+        for c in today_candles:
+            if c["datetime"] not in existing_times:
+                history.append(c)
+
+        # Keep only last MAX_HISTORY_CANDLES
+        history = history[-MAX_HISTORY_CANDLES:]
+
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history, f)
+
+        print(f"  Saved {len(history)} candles to history ({HISTORY_FILE.name})")
+    except Exception as e:
+        print(f"  History save error: {e}")
+
+
+def load_candle_history_raw():
+    """Load raw candle history from disk."""
+    if not HISTORY_FILE.exists():
+        return []
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def load_candle_history():
+    """Load previous days' candles into candles_5m_raw for instant macro_bias."""
+    history = load_candle_history_raw()
+    if not history:
+        print("  No candle history found — macro_bias starts from scratch")
+        return
+
+    today = now_ist().date()
+    loaded = 0
+    for c in history:
+        dt = datetime.fromisoformat(c["datetime"])
+        # Only load PREVIOUS days' candles (not today — today will build fresh)
+        if dt.date() < today:
+            candles_5m_raw.append({
+                "datetime": dt,
+                "open": c["open"],
+                "high": c["high"],
+                "low": c["low"],
+                "close": c["close"],
+                "volume": c.get("volume", 0),
+            })
+            loaded += 1
+
+    print(f"  Loaded {loaded} historical candles from previous days")
+    if loaded >= 50:
+        # Immediately compute macro_bias from history
+        update_market_brain()
+        print(f"  Instant macro_bias: {market_macro_bias} | bias: {market_bias} | regime: {market_regime}")
 
 
 # =========================
@@ -236,13 +315,16 @@ def update_market_brain():
 # DAILY RESET
 # =========================
 def check_daily_reset():
-    """Reset state at start of new trading day."""
+    """Reset state at start of new trading day. Load history for macro_bias."""
     global current_date, signaled_trades, candles_5m_raw
     global candles_15m_raw, candles_5m_for_15m, market_bias, market_regime, market_macro_bias
 
     today = now_ist().date()
     if current_date != today:
         if current_date is not None:
+            # Save today's candles before clearing
+            print(f"  Saving candle history before daily reset...")
+            save_candle_history()
             print(f"\n{'='*50}")
             print(f"NEW TRADING DAY: {today}")
             print(f"{'='*50}")
@@ -254,6 +336,9 @@ def check_daily_reset():
         market_bias = "NEUTRAL"
         market_macro_bias = "NEUTRAL"
         market_regime = "RANGE"
+
+        # Load previous days' candles for instant macro_bias
+        load_candle_history()
 
 
 # =========================
@@ -290,6 +375,10 @@ def process_5m_candle(c5):
         "close": c5["close"],
         "volume": c5.get("volume", 0),
     })
+
+    # Save candle history at end of market (3:15+ PM IST)
+    if ist_time.hour == 15 and ist_time.minute >= 15:
+        save_candle_history()
 
     # Build 15m candle (kept for compatibility)
     try_build_15m(c5)
@@ -568,6 +657,11 @@ print(f"Brain: bias + regime + liquidity + risk + exits")
 print(f"Server UTC: {SERVER_IS_UTC}")
 print(f"Started: {now_ist().strftime('%Y-%m-%d %H:%M:%S')} IST")
 print("=" * 50)
+
+# Load previous days' candles for instant macro_bias on startup
+print("Loading candle history...")
+current_date = now_ist().date()
+load_candle_history()
 
 threading.Thread(target=candle_engine, daemon=True).start()
 
