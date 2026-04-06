@@ -178,11 +178,92 @@ def load_candle_history_raw():
         return []
 
 
+def fetch_historical_candles():
+    """Fetch last 7 calendar days of 5m candles from Zerodha API and save to history."""
+    try:
+        from kiteconnect import KiteConnect
+
+        kite = KiteConnect(api_key=API_KEY)
+        kite.set_access_token(ACCESS_TOKEN)
+
+        today = now_ist().date()
+        from_date = today - timedelta(days=7)
+
+        print(f"  Fetching 5m candles from Zerodha: {from_date} to {today}")
+
+        candles = kite.historical_data(
+            instrument_token=260105,  # BANKNIFTY spot
+            from_date=from_date,
+            to_date=today,
+            interval="5minute"
+        )
+
+        if not candles:
+            print("  No historical candles returned from API")
+            return 0
+
+        # Convert to our format and save
+        history = []
+        for c in candles:
+            dt = pd.to_datetime(c["date"])
+            # Only keep market hours (9:15 - 15:30 IST)
+            if dt.hour < 9 or (dt.hour == 9 and dt.minute < 15) or dt.hour >= 16:
+                continue
+            history.append({
+                "datetime": dt.isoformat(),
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+                "volume": int(c.get("volume", 0)),
+            })
+
+        # Keep only last MAX_HISTORY_CANDLES
+        history = history[-MAX_HISTORY_CANDLES:]
+
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history, f)
+
+        # Count unique days
+        days = set()
+        for c in history:
+            days.add(c["datetime"][:10])
+
+        print(f"  Fetched {len(history)} candles ({len(days)} trading days) from Zerodha API")
+
+        # Send Telegram notification
+        msg = (
+            f"📊 <b>HISTORICAL DATA LOADED</b>\n\n"
+            f"<b>Candles</b> : {len(history)}\n"
+            f"<b>Days</b>    : {len(days)}\n"
+            f"<b>Source</b>  : Zerodha API\n"
+            f"<b>Time</b>    : {now_ist().strftime('%I:%M %p')} IST\n\n"
+            f"<i>Last 5 days data restored for macro trend analysis</i>"
+        )
+        try:
+            send_telegram_alert(msg)
+        except Exception:
+            pass
+
+        return len(history)
+
+    except Exception as e:
+        print(f"  Historical fetch error: {e}")
+        return 0
+
+
 def load_candle_history():
-    """Load previous days' candles into candles_5m_raw for instant macro_bias."""
+    """Load previous days' candles into candles_5m_raw for instant macro_bias.
+    If no history file exists, fetch from Zerodha API first."""
+
+    # If no history file, fetch from Zerodha API
+    if not HISTORY_FILE.exists():
+        print("  No candle history file — fetching from Zerodha API...")
+        fetch_historical_candles()
+
     history = load_candle_history_raw()
     if not history:
-        print("  No candle history found — macro_bias starts from scratch")
+        print("  No candle history available — macro_bias starts from scratch")
         return
 
     today = now_ist().date()
