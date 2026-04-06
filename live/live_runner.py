@@ -117,17 +117,17 @@ MAX_HISTORY_CANDLES = 375
 # =========================
 # HISTORY: SAVE / LOAD (5 trading days)
 # =========================
-def save_candle_history():
+def save_candle_history(notify=False):
     """Save recent candles to disk for next-day macro_bias."""
     try:
         # Combine existing history with today's candles
         history = load_candle_history_raw()
-        today_candles = list(candles_5m_raw)
-
-        # Convert datetimes to strings for JSON
-        for c in today_candles:
-            if isinstance(c.get("datetime"), datetime):
-                c["datetime"] = c["datetime"].isoformat()
+        today_candles = []
+        for c in candles_5m_raw:
+            cc = dict(c)
+            if isinstance(cc.get("datetime"), datetime):
+                cc["datetime"] = cc["datetime"].isoformat()
+            today_candles.append(cc)
 
         # Append today's candles (avoid duplicates by time)
         existing_times = {c["datetime"] for c in history}
@@ -141,7 +141,28 @@ def save_candle_history():
         with open(HISTORY_FILE, "w") as f:
             json.dump(history, f)
 
-        print(f"  Saved {len(history)} candles to history ({HISTORY_FILE.name})")
+        # Count unique days in history
+        days = set()
+        for c in history:
+            days.add(c["datetime"][:10])
+        n_days = len(days)
+
+        print(f"  Saved {len(history)} candles ({n_days} days) to history")
+
+        # Send Telegram notification
+        if notify:
+            msg = (
+                f"💾 <b>CANDLE HISTORY SAVED</b>\n\n"
+                f"<b>Candles</b> : {len(history)}\n"
+                f"<b>Days</b>    : {n_days}\n"
+                f"<b>Time</b>    : {now_ist().strftime('%I:%M %p')} IST\n\n"
+                f"<i>Last 5 days data restored for macro trend analysis</i>"
+            )
+            try:
+                send_telegram_alert(msg)
+            except Exception:
+                pass
+
     except Exception as e:
         print(f"  History save error: {e}")
 
@@ -376,9 +397,6 @@ def process_5m_candle(c5):
         "volume": c5.get("volume", 0),
     })
 
-    # Save candle history at end of market (3:15+ PM IST)
-    if ist_time.hour == 15 and ist_time.minute >= 15:
-        save_candle_history()
 
     # Build 15m candle (kept for compatibility)
     try_build_15m(c5)
@@ -663,7 +681,31 @@ print("Loading candle history...")
 current_date = now_ist().date()
 load_candle_history()
 
+
+# =========================
+# DAILY HISTORY SAVE (8 PM IST)
+# =========================
+def history_save_scheduler():
+    """Background thread: saves candle history at 8 PM IST daily with Telegram notification."""
+    saved_today = False
+    while True:
+        try:
+            now = now_ist()
+            # Save at 8 PM IST (hour=20)
+            if now.hour == 20 and not saved_today:
+                print(f"\n[8 PM] Saving candle history...")
+                save_candle_history(notify=True)
+                saved_today = True
+            # Reset flag after midnight
+            if now.hour == 0:
+                saved_today = False
+        except Exception as e:
+            print(f"  History scheduler error: {e}")
+        time.sleep(60)  # Check every minute
+
+
 threading.Thread(target=candle_engine, daemon=True).start()
+threading.Thread(target=history_save_scheduler, daemon=True).start()
 
 print("Starting WebSocket...")
 kws.connect(threaded=True)
