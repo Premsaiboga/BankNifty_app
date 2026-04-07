@@ -202,10 +202,13 @@ def fetch_historical_candles():
             print("  No historical candles returned from API")
             return 0
 
-        # Convert to our format and save
+        # Convert to our format and save (strip timezone — system uses naive IST)
         history = []
         for c in candles:
             dt = pd.to_datetime(c["date"])
+            # Strip timezone info — Zerodha returns tz-aware, our system uses naive IST
+            if dt.tzinfo is not None:
+                dt = dt.tz_localize(None)
             # Only keep market hours (9:15 - 15:30 IST)
             if dt.hour < 9 or (dt.hour == 9 and dt.minute < 15) or dt.hour >= 16:
                 continue
@@ -270,6 +273,9 @@ def load_candle_history():
     loaded = 0
     for c in history:
         dt = datetime.fromisoformat(c["datetime"])
+        # Strip timezone if present (system uses naive IST)
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
         # Only load PREVIOUS days' candles (not today — today will build fresh)
         if dt.date() < today:
             candles_5m_raw.append({
