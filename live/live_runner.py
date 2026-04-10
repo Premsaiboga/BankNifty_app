@@ -52,7 +52,7 @@ from live.live_engine_v2 import process_trade_v2
 from live.telegram_alert import send_telegram_alert
 
 # Brain modules
-from brain.market_brain import detect_bias, detect_regime, detect_macro_bias
+from brain.market_brain import detect_bias, detect_regime
 from brain.strategy_brain import allow_trade
 from brain.liquidity_engine import liquidity_block
 from brain.risk_brain import reversal_warning
@@ -106,7 +106,6 @@ current_date = None        # Track date for daily reset
 # Market state (updated from brain modules)
 market_bias = "NEUTRAL"
 market_regime = "RANGE"
-market_macro_bias = "NEUTRAL"
 
 # History file — stores last 5 trading days of 5m candles
 HISTORY_FILE = Path(__file__).resolve().parent / "candle_history.json"
@@ -397,13 +396,12 @@ def try_build_15m(c5):
 # UPDATE MARKET BRAIN (bias + regime from 5m data directly)
 # =========================
 def update_market_brain():
-    """Update market bias, macro bias, and regime from 5m candle data."""
-    global market_bias, market_regime, market_macro_bias
+    """Update market bias and regime from today's 5m candle data only."""
+    global market_bias, market_regime
 
     if len(candles_5m_raw) < 25:
         market_bias = "NEUTRAL"
         market_regime = "RANGE"
-        market_macro_bias = "NEUTRAL"
         return
 
     df_5m = pd.DataFrame(candles_5m_raw)
@@ -411,27 +409,24 @@ def update_market_brain():
     try:
         market_bias, bias_score = detect_bias(df_5m)
         market_regime = detect_regime(df_5m)
-        market_macro_bias, macro_score = detect_macro_bias(df_5m)
     except Exception as e:
         print(f"  Brain error: {e}")
         market_bias = "NEUTRAL"
         market_regime = "RANGE"
-        market_macro_bias = "NEUTRAL"
 
 
 # =========================
 # DAILY RESET
 # =========================
 def check_daily_reset():
-    """Reset state at start of new trading day. Load history for macro_bias."""
+    """Reset state at start of new trading day. Clean slate — today's data only."""
     global current_date, signaled_trades, candles_5m_raw
-    global candles_15m_raw, candles_5m_for_15m, market_bias, market_regime, market_macro_bias
+    global candles_15m_raw, candles_5m_for_15m, market_bias, market_regime
 
     today = now_ist().date()
     if current_date != today:
         if current_date is not None:
-            # Save today's candles before clearing
-            print(f"  Saving candle history before daily reset...")
+            # Save today's candles for record keeping
             save_candle_history()
             print(f"\n{'='*50}")
             print(f"NEW TRADING DAY: {today}")
@@ -442,11 +437,7 @@ def check_daily_reset():
         candles_15m_raw.clear()
         candles_5m_for_15m.clear()
         market_bias = "NEUTRAL"
-        market_macro_bias = "NEUTRAL"
         market_regime = "RANGE"
-
-        # Load previous days' candles for instant macro_bias
-        load_candle_history()
 
 
 # =========================
@@ -525,7 +516,7 @@ def process_5m_candle(c5):
         indicators_str += f" | EMA9={ema9:.0f}" if not pd.isna(ema9) else " | EMA9=N/A"
         indicators_str += f" | EMA21={ema21:.0f}" if not pd.isna(ema21) else " | EMA21=N/A"
         indicators_str += f" | MinsOpen={mfo:.0f}" if not pd.isna(mfo) else " | MinsOpen=N/A"
-        indicators_str += f" | BIAS={market_bias} | MACRO={market_macro_bias} | REGIME={market_regime}"
+        indicators_str += f" | BIAS={market_bias} | REGIME={market_regime}"
         if expiry_day:
             indicators_str += " | EXPIRY DAY"
         print(indicators_str)
@@ -571,9 +562,9 @@ def process_5m_candle(c5):
                                   f"RR=1:{trade['rr']}")
 
                             # === BRAIN FILTER 1: Strategy permission ===
-                            if not allow_trade(trade, market_bias, market_regime, market_macro_bias):
+                            if not allow_trade(trade, market_bias, market_regime):
                                 print(f"    -> BLOCKED by strategy_brain "
-                                      f"(bias={market_bias}, macro={market_macro_bias}, regime={market_regime})")
+                                      f"(bias={market_bias}, regime={market_regime})")
                                 continue
 
                             # === BRAIN FILTER 2: Liquidity / stop hunt ===
@@ -610,7 +601,6 @@ def process_5m_candle(c5):
                             if expiry_day:
                                 trade["is_expiry"] = True
                             trade["regime"] = market_regime
-                            trade["macro_bias"] = market_macro_bias
 
                             # Process through V2 engine (AI filter + telegram)
                             result = process_trade_v2(trade)
@@ -763,10 +753,9 @@ print(f"Server UTC: {SERVER_IS_UTC}")
 print(f"Started: {now_ist().strftime('%Y-%m-%d %H:%M:%S')} IST")
 print("=" * 50)
 
-# Load previous days' candles for instant macro_bias on startup
-print("Loading candle history...")
+# Fresh start every day — no historical data loading
 current_date = now_ist().date()
-load_candle_history()
+print("Clean slate — trading based on today's data only")
 
 
 # =========================
