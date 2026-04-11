@@ -151,11 +151,11 @@ def save_candle_history(notify=False):
         # Send Telegram notification
         if notify:
             msg = (
-                f"💾 <b>CANDLE HISTORY SAVED</b>\n\n"
+                f"💾 <b>DAILY BACKUP SAVED</b>\n\n"
                 f"<b>Candles</b> : {len(history)}\n"
                 f"<b>Days</b>    : {n_days}\n"
                 f"<b>Time</b>    : {now_ist().strftime('%I:%M %p')} IST\n\n"
-                f"<i>Last 5 days data restored for macro trend analysis</i>"
+                f"<i>Record-keeping only — trading uses today's data</i>"
             )
             try:
                 send_telegram_alert(msg)
