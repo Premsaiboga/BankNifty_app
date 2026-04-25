@@ -1,9 +1,8 @@
 # brain/live_exit_manager.py
 """
-Active trade management with DYNAMIC trailing stops and exit alerts.
-- Breakeven at 0.8R profit
-- Dynamic trail at 1.5R+ (locks move - 0.5R)
-- NO fixed target — lets winners run to 1:2, 1:3, 1:4+
+Active trade management with fixed-target exits and optional dynamic trailing.
+- Default: fixed target at configured R multiple
+- Optional legacy mode: breakeven at 0.8R and dynamic trail at 1.5R+
 - TREND REVERSAL detection: auto-exit on 2+ signals, warn on 1
   (strong reversal candle, EMA cross against trade, RSI extreme)
 - Telegram alerts on trail updates, warnings, and exits
@@ -12,6 +11,14 @@ Active trade management with DYNAMIC trailing stops and exit alerts.
 
 import pandas as pd
 import numpy as np
+from config import (
+    EXIT_TARGET_R,
+    TRAIL_BREAKEVEN_R,
+    TRAIL_FIXED_TARGET_SL,
+    TRAIL_LOCK_PROFIT_R,
+    TRAIL_LOCK_TRIGGER_R,
+    USE_FIXED_TARGET_EXIT,
+)
 
 active_trades = {}
 
@@ -35,8 +42,8 @@ def remove_trade(key):
 def update_live_exits(df):
     """
     Called every new 5m candle.
-    Dynamic trailing — NO fixed target. Lets winners run to 1:2, 1:3, 1:4+.
-    Sends Telegram alerts on trail updates (T1/T2/T3 crossed) and exits.
+    Fixed target mode banks planned wins while trailing SL protects open profit.
+    Legacy dynamic trailing remains available through config.
     Returns list of (trade, exit_price, pnl_pts) for closed trades.
     """
     from live.telegram_alert import send_telegram_alert
@@ -66,6 +73,88 @@ def update_live_exits(df):
             continue
 
         move_r = move / sl_dist
+
+        # =========================
+        # FIXED TARGET EXIT
+        # Conservative candle handling: if SL and target both touch inside the
+        # same 5m candle, count SL first because intrabar order is unknown.
+        # =========================
+        if USE_FIXED_TARGET_EXIT:
+            target_r = float(trade.get("exit_target_r", EXIT_TARGET_R))
+            if trade_type == "BUY":
+                target_price = trade.get("target", entry + target_r * sl_dist)
+                sl_hit = last_row["low"] <= trade["stoploss"]
+                target_hit = last_row["high"] >= target_price
+            else:
+                target_price = trade.get("target", entry - target_r * sl_dist)
+                sl_hit = last_row["high"] >= trade["stoploss"]
+                target_hit = last_row["low"] <= target_price
+
+            if sl_hit:
+                exit_price = trade["stoploss"]
+                pnl = exit_price - entry if trade_type == "BUY" else entry - exit_price
+                msg = format_exit_alert(trade, exit_price, "SL HIT")
+                send_telegram_alert(msg)
+                record_trade_result(pnl, trade)
+                closed_trades.append((trade, exit_price, pnl))
+                to_remove.append(key)
+                print(f"  EXIT: {trade['strategy']} {trade_type} SL HIT at {exit_price:.0f} ({pnl:+.0f}pts)")
+                continue
+
+            if target_hit:
+                pnl = target_price - entry if trade_type == "BUY" else entry - target_price
+                reason = f"TARGET HIT (+{target_r:.1f}R)"
+                msg = format_exit_alert(trade, target_price, reason)
+                send_telegram_alert(msg)
+                record_trade_result(pnl, trade)
+                closed_trades.append((trade, target_price, pnl))
+                to_remove.append(key)
+                print(f"  TARGET: {trade['strategy']} {trade_type} at {target_price:.0f} ({pnl:+.0f}pts)")
+                continue
+
+            if TRAIL_FIXED_TARGET_SL:
+                best_price = last_row["high"] if trade_type == "BUY" else last_row["low"]
+                favorable_move = best_price - entry if trade_type == "BUY" else entry - best_price
+                favorable_r = favorable_move / sl_dist
+
+                if favorable_r >= TRAIL_BREAKEVEN_R and not trade.get("breakeven"):
+                    if trade_type == "BUY":
+                        new_sl = max(trade["stoploss"], entry + 2)
+                    else:
+                        new_sl = min(trade["stoploss"], entry - 2)
+
+                    if new_sl != trade["stoploss"]:
+                        trade["stoploss"] = new_sl
+                        trade["breakeven"] = True
+                        be_label = "entry+2" if trade_type == "BUY" else "entry-2"
+                        msg = (
+                            f"🔒 <b>BREAKEVEN</b>\n"
+                            f"{trade['strategy']} {trade_type}\n"
+                            f"SL moved to {new_sl:.0f} ({be_label})\n"
+                            f"<i>Risk eliminated; target remains {target_price:.0f}</i>"
+                        )
+                        send_telegram_alert(msg)
+                        print(f"  TRAIL: {trade['strategy']} {trade_type} SL → BREAKEVEN ({new_sl:.0f})")
+
+                if favorable_r >= TRAIL_LOCK_TRIGGER_R:
+                    if trade_type == "BUY":
+                        new_sl = entry + TRAIL_LOCK_PROFIT_R * sl_dist
+                        should_update = new_sl > trade["stoploss"]
+                    else:
+                        new_sl = entry - TRAIL_LOCK_PROFIT_R * sl_dist
+                        should_update = new_sl < trade["stoploss"]
+
+                    if should_update:
+                        old_sl = trade["stoploss"]
+                        trade["stoploss"] = new_sl
+                        trade["trailed"] = True
+                        print(
+                            f"  TRAIL: {trade['strategy']} {trade_type} SL "
+                            f"{old_sl:.0f} → {new_sl:.0f} "
+                            f"(locking {TRAIL_LOCK_PROFIT_R:.1f}R before target)"
+                        )
+
+            continue
 
         # =========================
         # TARGET LEVEL NOTIFICATIONS (T1=1R, T2=2R, T3=3R)
@@ -99,10 +188,11 @@ def update_live_exits(df):
             if new_sl != sl:
                 trade["stoploss"] = new_sl
                 trade["breakeven"] = True
+                be_label = "entry+2" if trade_type == "BUY" else "entry-2"
                 msg = (
                     f"🔒 <b>BREAKEVEN</b>\n"
                     f"{trade['strategy']} {trade_type}\n"
-                    f"SL moved to {new_sl:.0f} (entry+2)\n"
+                    f"SL moved to {new_sl:.0f} ({be_label})\n"
                     f"<i>Risk eliminated</i>"
                 )
                 send_telegram_alert(msg)
@@ -210,7 +300,7 @@ def update_live_exits(df):
                 reason = f"TREND REVERSAL ({', '.join(reversal_reasons)})"
                 msg = format_exit_alert(trade, last_price, reason)
                 send_telegram_alert(msg)
-                record_trade_result(pnl)
+                record_trade_result(pnl, trade)
                 closed_trades.append((trade, last_price, pnl))
                 to_remove.append(key)
                 print(f"  ⚠️ REVERSAL EXIT: {trade['strategy']} {trade_type} at {last_price:.0f} ({pnl_r:+.1f}R) — {reason}")
@@ -236,24 +326,24 @@ def update_live_exits(df):
         # =========================
         # SL HIT
         # =========================
-        if trade_type == "BUY" and last_price <= trade["stoploss"] and key not in to_remove:
+        if trade_type == "BUY" and last_row["low"] <= trade["stoploss"] and key not in to_remove:
             pnl = trade["stoploss"] - entry
             pnl_r = pnl / sl_dist
             reason = f"TRAILED SL HIT ({pnl_r:+.1f}R)" if trade.get("trailed") else "SL HIT"
             msg = format_exit_alert(trade, trade["stoploss"], reason)
             send_telegram_alert(msg)
-            record_trade_result(pnl)
+            record_trade_result(pnl, trade)
             closed_trades.append((trade, trade["stoploss"], pnl))
             to_remove.append(key)
             print(f"  EXIT: {trade['strategy']} {trade_type} {reason} at {trade['stoploss']:.0f} ({pnl:+.0f}pts)")
 
-        elif trade_type == "SELL" and last_price >= trade["stoploss"] and key not in to_remove:
+        elif trade_type == "SELL" and last_row["high"] >= trade["stoploss"] and key not in to_remove:
             pnl = entry - trade["stoploss"]
             pnl_r = pnl / sl_dist
             reason = f"TRAILED SL HIT ({pnl_r:+.1f}R)" if trade.get("trailed") else "SL HIT"
             msg = format_exit_alert(trade, trade["stoploss"], reason)
             send_telegram_alert(msg)
-            record_trade_result(pnl)
+            record_trade_result(pnl, trade)
             closed_trades.append((trade, trade["stoploss"], pnl))
             to_remove.append(key)
             print(f"  EXIT: {trade['strategy']} {trade_type} {reason} at {trade['stoploss']:.0f} ({pnl:+.0f}pts)")

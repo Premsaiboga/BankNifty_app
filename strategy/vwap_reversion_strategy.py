@@ -37,8 +37,8 @@ class VWAPReversionStrategy:
             if trades_per_day[date] >= self.max_trades_per_day:
                 continue
 
-            # Only trade 9:30 AM - 3:00 PM (skip first 15 min for VWAP to stabilize)
-            if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 345:
+            # Only trade 9:30 AM - 2:45 PM (skip first 15 min for VWAP to stabilize)
+            if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 330:
                 continue
 
             if pd.isna(curr.get("atr")) or curr["atr"] < 1:

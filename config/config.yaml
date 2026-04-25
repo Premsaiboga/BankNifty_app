@@ -11,30 +11,40 @@ trade_end: "14:45"
 orb_end: "09:45"  # ORB formation period
 
 # Trade limits
-max_trades_per_day: 5
+max_trades_per_day: 6
 
 # Risk-Reward ratios (realistic for messy markets)
 # v1 had RR=4 which almost never hits in choppy conditions
 risk_reward:
-  ORB: 2.0
-  EMA_SCALP: 1.5
-  VWAP_REVERSION: 1.5
-  MOMENTUM_SURGE: 2.0
-  PIVOT_SCALP: 1.5
+  ORB: 1.2
+  EMA_SCALP: 1.2
+  VWAP_REVERSION: 1.2
+  MOMENTUM_SURGE: 1.2
+  PIVOT_SCALP: 1.2
+
+exit:
+  use_fixed_target: true
+  target_r: 1.2
+  trail_stoploss: true
+  breakeven_r: 0.8
+  lock_trigger_r: 1.0
+  lock_profit_r: 0.3
 
 # AI probability thresholds (per strategy)
-# Lower thresholds = more trades = matches real market conditions
+# Stricter thresholds reduce low-quality alerts and overtrading.
 ml_thresholds:
-  ORB: 0.48
-  EMA_SCALP: 0.46
-  VWAP_REVERSION: 0.45
-  MOMENTUM_SURGE: 0.48
-  PIVOT_SCALP: 0.46
+  ORB: 0.50
+  EMA_SCALP: 0.50
+  VWAP_REVERSION: 0.50
+  MOMENTUM_SURGE: 0.50
+  PIVOT_SCALP: 0.50
 
 # Capital management
 capital: 10000
 lot_size: 15
 max_daily_loss: 3000
+max_daily_loss_r: 3.0
+max_consecutive_losses: 3
 
 # BankNifty option config
 strike_interval: 100

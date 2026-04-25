@@ -19,6 +19,18 @@ load_dotenv()
 
 from ml.ai_filter_v2 import ai_filter_v2
 from live.telegram_alert import send_telegram_alert
+from config import (
+    DAILY_MAX_LOSS_R,
+    EXIT_TARGET_R,
+    MAX_DAILY_LOSS,
+    MAX_CONSECUTIVE_LOSSES,
+    MAX_TRADES_PER_DAY,
+    TRAIL_BREAKEVEN_R,
+    TRAIL_FIXED_TARGET_SL,
+    TRAIL_LOCK_PROFIT_R,
+    TRAIL_LOCK_TRIGGER_R,
+    USE_FIXED_TARGET_EXIT,
+)
 
 # =========================
 # TIMEZONE
@@ -35,15 +47,20 @@ def _now_ist():
 # =========================
 # CONFIG
 # =========================
-MAX_TRADES_PER_DAY = 15        # Paper trading: more trades = more data
-MAX_TRADES_EXPIRY = 10         # Paper trading: allow more on expiry too
-MAX_DAILY_LOSS = 3000          # Stop trading after this loss in a day
+MAX_TRADES_EXPIRY = MAX_TRADES_PER_DAY
 
 
 # =========================
 # STATE
 # =========================
-daily_trades = {"date": None, "count": 0, "trades": [], "pnl": 0}
+daily_trades = {
+    "date": None,
+    "count": 0,
+    "trades": [],
+    "pnl": 0,
+    "pnl_r": 0.0,
+    "consecutive_losses": 0,
+}
 recent_signals = []  # Track correlated signals
 
 
@@ -54,26 +71,42 @@ def reset_daily_state():
         daily_trades["count"] = 0
         daily_trades["trades"] = []
         daily_trades["pnl"] = 0
+        daily_trades["pnl_r"] = 0.0
+        daily_trades["consecutive_losses"] = 0
         recent_signals.clear()
 
 
-def record_trade_result(pnl_amount: float):
-    """Called by exit manager when a trade closes. Tracks daily P&L."""
+def record_trade_result(pnl_amount: float, trade=None):
+    """Called by exit manager when a trade closes. Tracks daily P&L and R."""
     daily_trades["pnl"] += pnl_amount
+    if trade:
+        risk = abs(trade["entry"] - trade.get("original_sl", trade.get("stoploss", trade["entry"])))
+        pnl_r = pnl_amount / risk if risk > 0 else 0
+        daily_trades["pnl_r"] += pnl_r
+        if pnl_r < 0:
+            daily_trades["consecutive_losses"] += 1
+        else:
+            daily_trades["consecutive_losses"] = 0
 
 
 # =========================
 # TELEGRAM FORMATTERS
 # =========================
 def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
-    """Format trade alert with T1/T2/T3/T4 target levels + dynamic trailing."""
+    """Format trade alert with the configured exit plan."""
 
     direction = "🟢 BUY" if trade["type"] == "BUY" else "🔴 SELL"
     entry = trade["entry"]
     sl = trade["stoploss"]
     sl_dist = abs(entry - sl)
 
-    # Calculate target levels
+    target_r = float(trade.get("exit_target_r", EXIT_TARGET_R))
+    if trade["type"] == "BUY":
+        fixed_target = entry + sl_dist * target_r
+    else:
+        fixed_target = entry - sl_dist * target_r
+
+    # Calculate reference levels
     if trade["type"] == "BUY":
         t1 = entry + sl_dist * 1  # 1:1
         t2 = entry + sl_dist * 2  # 1:2
@@ -93,15 +126,15 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
         f"<b>Type</b>     : {direction}\n"
         f"<b>Entry</b>    : {entry:.1f}\n"
         f"<b>SL</b>       : {sl:.1f} ({sl_dist:.0f} pts)\n\n"
-        f"<b>Targets (Dynamic Trail):</b>\n"
-        f"  T1 (1:1) : {t1:.1f}\n"
-        f"  T2 (1:2) : {t2:.1f}\n"
-        f"  T3 (1:3) : {t3:.1f}\n"
-        f"  T4 (1:4) : {t4:.1f}\n\n"
+        f"<b>Exit Plan:</b>\n"
+        f"  Target ({target_r:.1f}R) : {fixed_target:.1f}\n"
+        f"  Reference 1R  : {t1:.1f}\n"
+        f"  Reference 2R  : {t2:.1f}\n\n"
         f"<b>AI Prob</b>  : {ai_result['probability']}\n"
         f"<b>Time</b>     : {now.strftime('%I:%M %p')}\n\n"
-        f"<i>Trail: BE at 0.8R, dynamic trail at 1.5R+</i>\n"
-        f"<i>Regime: {trade.get('regime', 'N/A')}</i>"
+        f"<i>Exit: target {target_r:.1f}R"
+        f"{f', trail BE {TRAIL_BREAKEVEN_R:.1f}R, lock {TRAIL_LOCK_PROFIT_R:.1f}R at {TRAIL_LOCK_TRIGGER_R:.1f}R' if TRAIL_FIXED_TARGET_SL else ''}</i>\n"
+        f"<i>Regime: {trade.get('regime', 'N/A')} | Macro: {trade.get('macro_bias', 'N/A')}</i>"
     )
 
     return msg
@@ -215,6 +248,14 @@ def process_trade_v2(trade: dict):
         print(f"[LOSS LIMIT] Daily loss {daily_trades['pnl']:.0f} exceeds {MAX_DAILY_LOSS}. Stopped.")
         return None
 
+    if daily_trades["pnl_r"] <= -DAILY_MAX_LOSS_R:
+        print(f"[R LOSS LIMIT] Daily loss {daily_trades['pnl_r']:.1f}R reached. Stopped.")
+        return None
+
+    if daily_trades["consecutive_losses"] >= MAX_CONSECUTIVE_LOSSES:
+        print(f"[COOLDOWN] {daily_trades['consecutive_losses']} losses in a row. Stopped for today.")
+        return None
+
     # AI Filter — the ONLY quality gate. If AI says TAKE, we trade.
     ai_result = ai_filter_v2(trade)
 
@@ -226,6 +267,15 @@ def process_trade_v2(trade: dict):
 
     if ai_result["decision"] != "TAKE":
         return None
+
+    if USE_FIXED_TARGET_EXIT:
+        sl_dist = abs(trade["entry"] - trade["stoploss"])
+        if trade["type"] == "BUY":
+            trade["target"] = round(trade["entry"] + EXIT_TARGET_R * sl_dist, 2)
+        else:
+            trade["target"] = round(trade["entry"] - EXIT_TARGET_R * sl_dist, 2)
+        trade["exit_target_r"] = EXIT_TARGET_R
+        trade["rr"] = EXIT_TARGET_R
 
     # Correlated signal warning
     same_dir_count = check_correlated_signals(trade)

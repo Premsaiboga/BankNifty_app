@@ -15,6 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import joblib
 import pandas as pd
 import numpy as np
+from config import STRATEGY_THRESHOLDS as CONFIG_STRATEGY_THRESHOLDS
 
 # =========================
 # LOAD MODEL
@@ -41,13 +42,14 @@ def _load_model():
     scaler = bundle["scaler"]
     FEATURES = bundle["features"]
 
-    # Use lower of model's thresholds and our defaults (never raise above 0.35)
+    # Keep live trading conservative. The training bundle can suggest thresholds,
+    # but it should not lower the production floor and reopen noisy signals.
     global STRATEGY_THRESHOLDS
     model_thresholds = bundle.get("optimal_thresholds", {})
     if model_thresholds:
         for strat, thresh in model_thresholds.items():
             if strat in STRATEGY_THRESHOLDS:
-                STRATEGY_THRESHOLDS[strat] = min(float(thresh), STRATEGY_THRESHOLDS[strat])
+                STRATEGY_THRESHOLDS[strat] = max(float(thresh), STRATEGY_THRESHOLDS[strat])
 
     print(f"Loaded model_v2 ({bundle.get('model_type', 'unknown')})")
     print(f"Thresholds: {STRATEGY_THRESHOLDS}")
@@ -56,14 +58,7 @@ def _load_model():
 # =========================
 # STRATEGY THRESHOLDS
 # =========================
-# 4 strategies enabled (MOMENTUM_SURGE disabled — 37% OOS WR).
-# Model will override with optimal thresholds from training.
-STRATEGY_THRESHOLDS = {
-    "ORB": 0.35,
-    "PIVOT_SCALP": 0.35,
-    "VWAP_REVERSION": 0.35,
-    "EMA_SCALP": 0.35,
-}
+STRATEGY_THRESHOLDS = dict(CONFIG_STRATEGY_THRESHOLDS)
 
 # Default for unknown strategies
 DEFAULT_THRESHOLD = 0.50
@@ -119,16 +114,14 @@ def ai_filter_v2(trade: dict) -> dict:
     threshold = STRATEGY_THRESHOLDS.get(strategy, DEFAULT_THRESHOLD)
 
     # Confidence level
-    if prob >= threshold + 0.15:
+    if prob >= threshold + 0.10:
         confidence = "HIGH"
-    elif prob >= threshold + 0.05:
+    elif prob >= threshold:
         confidence = "MEDIUM"
     else:
         confidence = "LOW"
 
-    # Take MEDIUM + HIGH confidence trades
-    # HIGH = prob >= threshold + 0.15, MEDIUM = prob >= threshold + 0.05
-    # LOW = prob < threshold + 0.05 → skip
+    # Take only signals that clear the production probability floor.
     decision = "TAKE" if confidence in ("HIGH", "MEDIUM") else "SKIP"
 
     return {

@@ -1,15 +1,12 @@
 """
 Comprehensive Backtest V3 — Dynamic Trailing Stops
 ====================================================
-Backtests all 5 strategies with AI filtering + DYNAMIC TRAILING.
-NO fixed target — trailing stops let winners run to 1:2, 1:3, 1:4+.
+Backtests all strategies with macro filtering + AI filtering + fixed target exits.
 
 Exit Logic (per candle):
-1. Check trailed SL hit → exit at trail level
-2. If price moved 0.8R in favor → move SL to BREAKEVEN
-3. If price moved 1.5R+ → trail SL dynamically (locks move - 0.5R)
-4. End of day → exit at close price
-5. NO fixed target cap — trailing captures maximum move (1:2, 1:3, 1:4+)
+1. Check SL hit
+2. Check fixed target hit
+3. End of day → exit at close price
 """
 
 import sys
@@ -26,6 +23,20 @@ from strategy.ema_scalp_strategy import EMAScalpStrategy
 from strategy.vwap_reversion_strategy import VWAPReversionStrategy
 from strategy.pivot_scalp_strategy import PivotScalpStrategy
 from ml.ai_filter_v2 import ai_filter_v2
+from brain.market_brain import detect_bias, detect_regime, detect_macro_bias
+from brain.strategy_brain import allow_trade
+from config import (
+    DAILY_MAX_LOSS_R,
+    EXIT_TARGET_R,
+    MAX_ACTIVE_TRADES,
+    MAX_CONSECUTIVE_LOSSES,
+    MAX_TRADES_PER_DAY,
+    TRAIL_BREAKEVEN_R,
+    TRAIL_FIXED_TARGET_SL,
+    TRAIL_LOCK_PROFIT_R,
+    TRAIL_LOCK_TRIGGER_R,
+    USE_FIXED_TARGET_EXIT,
+)
 
 # =========================
 # CONFIG
@@ -35,6 +46,7 @@ CAPITAL = 10000
 RISK_PER_TRADE = 750
 LOT_SIZE = 15
 SLIPPAGE_POINTS = 5
+MAX_HISTORY_CANDLES = 375
 
 # =========================
 # LOAD DATA
@@ -57,10 +69,9 @@ print(f"After warmup: {len(df)} candles")
 # =========================
 def evaluate_trade(df, trade, max_candles=60):
     """
-    Evaluate trade with DYNAMIC TRAILING STOP logic:
-    - Move SL to breakeven after 0.8R profit
-    - Trail SL at (move - 0.5R) after 1.5R profit
-    - NO fixed target cap — lets winners run to 1:2, 1:3, 1:4+
+    Evaluate trade using the configured exit plan.
+    Fixed target mode is conservative: if SL and target both touch in the same
+    candle, count SL first because intrabar order is unknown.
     """
     entry = trade["entry"]
     sl = trade["stoploss"]
@@ -75,7 +86,7 @@ def evaluate_trade(df, trade, max_candles=60):
 
     idx_list = df.index[df["datetime"] == entry_time].tolist()
     if not idx_list:
-        return {"result": "SKIP", "pnl_r": 0}
+        return {"result": "SKIP", "pnl_r": 0, "exit_idx": None}
 
     idx = idx_list[0]
     entry_date = df.iloc[idx]["date"]
@@ -83,7 +94,68 @@ def evaluate_trade(df, trade, max_candles=60):
 
     sl_dist = abs(entry - sl)
     if sl_dist == 0:
-        return {"result": "SKIP", "pnl_r": 0}
+        return {"result": "SKIP", "pnl_r": 0, "exit_idx": None}
+
+    if USE_FIXED_TARGET_EXIT:
+        current_sl = sl
+        if trade_type == "BUY":
+            target = entry + EXIT_TARGET_R * sl_dist
+        else:
+            target = entry - EXIT_TARGET_R * sl_dist
+
+        for i in range(idx + 1, end_idx):
+            candle = df.iloc[i]
+
+            if candle["date"] != entry_date:
+                prev = df.iloc[i - 1]
+                if trade_type == "BUY":
+                    pnl_r = (prev["close"] - entry) / sl_dist
+                else:
+                    pnl_r = (entry - prev["close"]) / sl_dist
+                result = "EOD_WIN" if pnl_r > 0 else "EOD_LOSS"
+                return {"result": result, "pnl_r": round(pnl_r, 2), "exit_idx": i - 1}
+
+            if trade_type == "BUY":
+                if candle["low"] <= current_sl:
+                    pnl_r = (current_sl - entry) / sl_dist
+                    if pnl_r > 0:
+                        return {"result": "TRAIL_WIN", "pnl_r": round(pnl_r, 2), "exit_idx": i}
+                    if pnl_r >= -0.1:
+                        return {"result": "BREAKEVEN", "pnl_r": 0, "exit_idx": i}
+                    return {"result": "LOSS", "pnl_r": -1, "exit_idx": i}
+                if candle["high"] >= target:
+                    return {"result": "TARGET_WIN", "pnl_r": EXIT_TARGET_R, "exit_idx": i}
+            else:
+                if candle["high"] >= current_sl:
+                    pnl_r = (entry - current_sl) / sl_dist
+                    if pnl_r > 0:
+                        return {"result": "TRAIL_WIN", "pnl_r": round(pnl_r, 2), "exit_idx": i}
+                    if pnl_r >= -0.1:
+                        return {"result": "BREAKEVEN", "pnl_r": 0, "exit_idx": i}
+                    return {"result": "LOSS", "pnl_r": -1, "exit_idx": i}
+                if candle["low"] <= target:
+                    return {"result": "TARGET_WIN", "pnl_r": EXIT_TARGET_R, "exit_idx": i}
+
+            if TRAIL_FIXED_TARGET_SL:
+                if trade_type == "BUY":
+                    favorable_r = (candle["high"] - entry) / sl_dist
+                    if favorable_r >= TRAIL_BREAKEVEN_R:
+                        current_sl = max(current_sl, entry + 2)
+                    if favorable_r >= TRAIL_LOCK_TRIGGER_R:
+                        current_sl = max(current_sl, entry + TRAIL_LOCK_PROFIT_R * sl_dist)
+                else:
+                    favorable_r = (entry - candle["low"]) / sl_dist
+                    if favorable_r >= TRAIL_BREAKEVEN_R:
+                        current_sl = min(current_sl, entry - 2)
+                    if favorable_r >= TRAIL_LOCK_TRIGGER_R:
+                        current_sl = min(current_sl, entry - TRAIL_LOCK_PROFIT_R * sl_dist)
+
+        last = df.iloc[end_idx - 1]
+        if trade_type == "BUY":
+            pnl_r = (last["close"] - entry) / sl_dist
+        else:
+            pnl_r = (entry - last["close"]) / sl_dist
+        return {"result": "TIMEOUT", "pnl_r": round(pnl_r, 2), "exit_idx": end_idx - 1}
 
     current_sl = sl
     best_move = 0  # Best favorable move in R units
@@ -100,7 +172,7 @@ def evaluate_trade(df, trade, max_candles=60):
             else:
                 pnl_r = (entry - prev["close"]) / sl_dist
             result = "EOD_WIN" if pnl_r > 0 else "EOD_LOSS"
-            return {"result": result, "pnl_r": round(pnl_r, 2)}
+            return {"result": result, "pnl_r": round(pnl_r, 2), "exit_idx": i - 1}
 
         # Calculate current favorable move
         if trade_type == "BUY":
@@ -142,21 +214,21 @@ def evaluate_trade(df, trade, max_candles=60):
             if candle["low"] <= current_sl:
                 pnl_r = (current_sl - entry) / sl_dist
                 if pnl_r > 0:
-                    return {"result": "TRAIL_WIN", "pnl_r": round(pnl_r, 2)}
+                    return {"result": "TRAIL_WIN", "pnl_r": round(pnl_r, 2), "exit_idx": i}
                 elif pnl_r >= -0.1:  # Breakeven (small tolerance)
-                    return {"result": "BREAKEVEN", "pnl_r": 0}
+                    return {"result": "BREAKEVEN", "pnl_r": 0, "exit_idx": i}
                 else:
-                    return {"result": "LOSS", "pnl_r": -1}
+                    return {"result": "LOSS", "pnl_r": -1, "exit_idx": i}
 
         else:  # SELL
             if candle["high"] >= current_sl:
                 pnl_r = (entry - current_sl) / sl_dist
                 if pnl_r > 0:
-                    return {"result": "TRAIL_WIN", "pnl_r": round(pnl_r, 2)}
+                    return {"result": "TRAIL_WIN", "pnl_r": round(pnl_r, 2), "exit_idx": i}
                 elif pnl_r >= -0.1:
-                    return {"result": "BREAKEVEN", "pnl_r": 0}
+                    return {"result": "BREAKEVEN", "pnl_r": 0, "exit_idx": i}
                 else:
-                    return {"result": "LOSS", "pnl_r": -1}
+                    return {"result": "LOSS", "pnl_r": -1, "exit_idx": i}
 
     # Timeout — use current position
     last = df.iloc[end_idx - 1]
@@ -164,7 +236,7 @@ def evaluate_trade(df, trade, max_candles=60):
         pnl_r = (last["close"] - entry) / sl_dist
     else:
         pnl_r = (entry - last["close"]) / sl_dist
-    return {"result": "TIMEOUT", "pnl_r": round(pnl_r, 2)}
+    return {"result": "TIMEOUT", "pnl_r": round(pnl_r, 2), "exit_idx": end_idx - 1}
 
 # =========================
 # STRATEGIES
@@ -195,17 +267,52 @@ print(f"\nTotal raw signals: {len(all_trades)}")
 # =========================
 # AI FILTER + EVALUATE
 # =========================
-print("\nApplying AI filter and evaluating with trailing stops...")
+print("\nApplying AI filter and evaluating with configured exits...")
 
 results = []
 daily_trades = {}
+daily_pnl_r = {}
+daily_consecutive_losses = {}
+active_exit_indices = []
+blocked_by_brain = 0
+blocked_by_position = 0
+blocked_by_daily_guard = 0
 
 for trade in all_trades:
     date = trade["time"].date() if hasattr(trade["time"], "date") else pd.to_datetime(trade["time"]).date()
     daily_trades.setdefault(date, 0)
+    daily_pnl_r.setdefault(date, 0.0)
+    daily_consecutive_losses.setdefault(date, 0)
 
-    # Max 5 trades per day
-    if daily_trades[date] >= 5:
+    idx_list = df.index[df["datetime"] == trade["time"]].tolist()
+    if not idx_list:
+        continue
+    entry_idx = idx_list[0]
+
+    # Max trades per day, matching live config.
+    if daily_trades[date] >= MAX_TRADES_PER_DAY:
+        continue
+
+    if (
+        daily_pnl_r[date] <= -DAILY_MAX_LOSS_R
+        or daily_consecutive_losses[date] >= MAX_CONSECUTIVE_LOSSES
+    ):
+        blocked_by_daily_guard += 1
+        continue
+
+    # Match live behavior: capped concurrent BankNifty positions.
+    active_exit_indices = [i for i in active_exit_indices if i >= entry_idx]
+    if len(active_exit_indices) >= MAX_ACTIVE_TRADES:
+        blocked_by_position += 1
+        continue
+
+    context = df.iloc[:entry_idx + 1]
+    market_bias, _ = detect_bias(context)
+    market_regime = detect_regime(context)
+    market_macro_bias, _ = detect_macro_bias(context.tail(MAX_HISTORY_CANDLES))
+
+    if not allow_trade(trade, market_bias, market_regime, market_macro_bias):
+        blocked_by_brain += 1
         continue
 
     # AI Filter
@@ -221,6 +328,19 @@ for trade in all_trades:
         continue
 
     daily_trades[date] += 1
+    daily_pnl_r[date] += eval_result["pnl_r"]
+    if eval_result["pnl_r"] < 0:
+        daily_consecutive_losses[date] += 1
+    else:
+        daily_consecutive_losses[date] = 0
+    if eval_result.get("exit_idx") is not None:
+        active_exit_indices.append(eval_result["exit_idx"])
+
+    sl_dist = abs(trade["entry"] - trade["stoploss"])
+    if trade["type"] == "BUY":
+        effective_target = trade["entry"] + EXIT_TARGET_R * sl_dist
+    else:
+        effective_target = trade["entry"] - EXIT_TARGET_R * sl_dist
 
     results.append({
         "date": date,
@@ -229,10 +349,13 @@ for trade in all_trades:
         "type": trade["type"],
         "entry": trade["entry"],
         "stoploss": trade["stoploss"],
-        "target": trade["target"],
-        "rr": trade["rr"],
+        "target": round(effective_target, 2) if USE_FIXED_TARGET_EXIT else trade["target"],
+        "rr": EXIT_TARGET_R if USE_FIXED_TARGET_EXIT else trade["rr"],
         "ai_prob": ai_result["probability"],
         "ai_confidence": ai_result["confidence"],
+        "bias": market_bias,
+        "macro_bias": market_macro_bias,
+        "regime": market_regime,
         "result": eval_result["result"],
         "pnl_r": eval_result["pnl_r"],
     })
@@ -247,10 +370,12 @@ if len(df_results) == 0:
 # RESULTS ANALYSIS
 # =========================
 print(f"\n{'='*60}")
-print(f"  BACKTEST RESULTS V3 (with trailing stops)")
+exit_label = f"fixed {EXIT_TARGET_R:.1f}R target" if USE_FIXED_TARGET_EXIT else "trailing stops"
+print(f"  BACKTEST RESULTS V3 ({exit_label})")
 print(f"{'='*60}")
 
 total_trades = len(df_results)
+target_wins = len(df_results[df_results["result"] == "TARGET_WIN"])
 trail_wins = len(df_results[df_results["result"] == "TRAIL_WIN"])
 breakevens = len(df_results[df_results["result"] == "BREAKEVEN"])
 eod_wins = len(df_results[df_results["result"] == "EOD_WIN"])
@@ -258,8 +383,8 @@ eod_losses = len(df_results[df_results["result"] == "EOD_LOSS"])
 losses = len(df_results[df_results["result"] == "LOSS"])
 timeouts = len(df_results[df_results["result"] == "TIMEOUT"])
 
-# Profitable = TRAIL_WIN + EOD_WIN + BREAKEVEN
-profitable = trail_wins + eod_wins + breakevens
+# Profitable = TARGET/TRAIL wins + EOD wins + breakevens
+profitable = target_wins + trail_wins + eod_wins + breakevens
 profit_rate = profitable / total_trades * 100 if total_trades > 0 else 0
 net_pnl_r = df_results["pnl_r"].sum()
 
@@ -271,11 +396,16 @@ r3_wins = len(tw[(tw["pnl_r"] >= 2.5) & (tw["pnl_r"] < 3.5)])  # 1:3 range
 r4_plus = len(tw[tw["pnl_r"] >= 3.5])  # 1:4+ range
 
 print(f"\nTotal AI-filtered trades: {total_trades}")
-print(f"\n  Trail Stop Wins:           {trail_wins:>4} trades  (+{tw['pnl_r'].sum():.1f}R)")
-print(f"    ├─ 1:1 range (<1.5R):    {r1_wins:>4} trades")
-print(f"    ├─ 1:2 range (1.5-2.5R): {r2_wins:>4} trades")
-print(f"    ├─ 1:3 range (2.5-3.5R): {r3_wins:>4} trades")
-print(f"    └─ 1:4+ range (>3.5R):   {r4_plus:>4} trades")
+print(f"Brain-filtered raw signals: {blocked_by_brain}")
+print(f"Skipped by active-trade cap ({MAX_ACTIVE_TRADES}): {blocked_by_position}")
+print(f"Skipped by daily guard: {blocked_by_daily_guard}")
+print(f"\n  Target Wins:               {target_wins:>4} trades  (+{df_results[df_results['result']=='TARGET_WIN']['pnl_r'].sum():.1f}R)")
+print(f"  Trail Stop Wins:           {trail_wins:>4} trades  (+{tw['pnl_r'].sum():.1f}R)")
+if trail_wins:
+    print(f"    1:1 range (<1.5R):       {r1_wins:>4} trades")
+    print(f"    1:2 range (1.5-2.5R):    {r2_wins:>4} trades")
+    print(f"    1:3 range (2.5-3.5R):    {r3_wins:>4} trades")
+    print(f"    1:4+ range (>3.5R):      {r4_plus:>4} trades")
 print(f"  Breakeven Exits:           {breakevens:>4} trades  ( 0R)")
 print(f"  EOD Wins:                  {eod_wins:>4} trades  (+{df_results[df_results['result']=='EOD_WIN']['pnl_r'].sum():.1f}R)")
 print(f"  EOD Losses:                {eod_losses:>4} trades  ({df_results[df_results['result']=='EOD_LOSS']['pnl_r'].sum():.1f}R)")

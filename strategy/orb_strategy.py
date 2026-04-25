@@ -51,8 +51,8 @@ class ORBStrategy:
             for idx in range(3, len(group)):
                 row = group.iloc[idx]
 
-                # Only trade between 9:30 and 15:00
-                if row["minutes_from_open"] < 15 or row["minutes_from_open"] > 345:
+                # Only trade between 9:30 and 14:45
+                if row["minutes_from_open"] < 15 or row["minutes_from_open"] > 330:
                     continue
 
                 if pd.isna(row.get("atr")) or row["atr"] < 1:

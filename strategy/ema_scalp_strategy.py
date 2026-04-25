@@ -41,8 +41,8 @@ class EMAScalpStrategy:
                 pending_cross = None
                 continue
 
-            # Only trade 9:30 AM - 3:00 PM
-            if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 345:
+            # Only trade 9:30 AM - 2:45 PM
+            if curr["minutes_from_open"] < 15 or curr["minutes_from_open"] > 330:
                 continue
 
             if pd.isna(curr.get("atr")) or curr["atr"] < 1:
