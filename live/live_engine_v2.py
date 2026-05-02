@@ -17,6 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
+from brain.trade_quality import passes_quality_gate
 from ml.ai_filter_v2 import ai_filter_v2
 from live.telegram_alert import send_telegram_alert
 from config import (
@@ -256,7 +257,7 @@ def process_trade_v2(trade: dict):
         print(f"[COOLDOWN] {daily_trades['consecutive_losses']} losses in a row. Stopped for today.")
         return None
 
-    # AI Filter — the ONLY quality gate. If AI says TAKE, we trade.
+    # AI Filter plus final setup-quality gate.
     ai_result = ai_filter_v2(trade)
 
     regime = trade.get("regime", "RANGE")
@@ -266,6 +267,11 @@ def process_trade_v2(trade: dict):
     print(status)
 
     if ai_result["decision"] != "TAKE":
+        return None
+
+    quality_ok, quality_reasons = passes_quality_gate(trade, ai_result)
+    if not quality_ok:
+        print(f"  -> BLOCKED by quality gate: {', '.join(quality_reasons)}")
         return None
 
     if USE_FIXED_TARGET_EXIT:

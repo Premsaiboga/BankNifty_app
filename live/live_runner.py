@@ -46,6 +46,7 @@ from collections import deque
 from strategy.indicators import calculate_all_indicators
 from strategy.orb_strategy import ORBStrategy
 from strategy.ema_scalp_strategy import EMAScalpStrategy
+from strategy.momentum_surge_strategy import MomentumSurgeStrategy
 from strategy.vwap_reversion_strategy import VWAPReversionStrategy
 from strategy.pivot_scalp_strategy import PivotScalpStrategy
 from live.live_engine_v2 import process_trade_v2
@@ -302,6 +303,7 @@ def load_candle_history():
 strategies = [
     ORBStrategy(rr=2.0),
     EMAScalpStrategy(rr=2.0),
+    MomentumSurgeStrategy(rr=2.0),
     VWAPReversionStrategy(rr=2.0),
     PivotScalpStrategy(rr=2.0),
 ]
@@ -628,6 +630,7 @@ def process_5m_candle(c5):
                             if expiry_day:
                                 trade["is_expiry"] = True
                             trade["regime"] = market_regime
+                            trade["market_bias"] = market_bias
                             trade["macro_bias"] = market_macro_bias
 
                             # Process through V2 engine (AI filter + telegram)
@@ -775,7 +778,7 @@ kws.on_error = on_error
 # =========================
 print("=" * 50)
 print("BankNifty Live Runner V2 — Production")
-print(f"Strategies: ORB, EMA_SCALP, VWAP_REVERSION, PIVOT_SCALP")
+print(f"Strategies: ORB, EMA_SCALP, MOMENTUM_SURGE, VWAP_REVERSION, PIVOT_SCALP")
 print(f"Brain: intraday bias + macro bias + regime + liquidity + risk + exits")
 print(f"Server UTC: {SERVER_IS_UTC}")
 print(f"Started: {now_ist().strftime('%Y-%m-%d %H:%M:%S')} IST")

@@ -1,10 +1,8 @@
 """
 Build Training Data V3
 ======================
-Generates labeled training data with TRAILING STOP evaluation.
-A trade is labeled WIN (1) if it exits with any profit (target hit,
-trail win, or EOD win). This teaches the ML model to select trades
-that will be profitable under our trailing stop exit system.
+Generates labeled training data using the same fixed-target plus protective
+trailing exit plan used by live trading and backtests.
 """
 
 import sys
@@ -18,9 +16,18 @@ import numpy as np
 from strategy.indicators import calculate_all_indicators
 from strategy.orb_strategy import ORBStrategy
 from strategy.ema_scalp_strategy import EMAScalpStrategy
+from strategy.momentum_surge_strategy import MomentumSurgeStrategy
 from strategy.vwap_reversion_strategy import VWAPReversionStrategy
 from strategy.pivot_scalp_strategy import PivotScalpStrategy
 from ml.features import FEATURE_COLUMNS
+from config import (
+    EXIT_TARGET_R,
+    TRAIL_BREAKEVEN_R,
+    TRAIL_FIXED_TARGET_SL,
+    TRAIL_LOCK_PROFIT_R,
+    TRAIL_LOCK_TRIGGER_R,
+    USE_FIXED_TARGET_EXIT,
+)
 
 # =========================
 # CONFIG
@@ -48,26 +55,23 @@ df = df.dropna(subset=["atr", "rsi_14", "ema_9", "ema_21", "bb_upper"]).reset_in
 print(f"After indicator warmup: {len(df)} candles")
 
 # =========================
-# TRADE EVALUATOR WITH TRAILING STOPS
+# TRADE EVALUATOR WITH LIVE EXIT PLAN
 # =========================
 def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
     """
-    Evaluate trade with trailing stop logic.
+    Evaluate trade with the configured live exit plan.
     Returns: 1 = profitable exit (target/trail/breakeven/EOD+), 0 = loss
     """
     entry = trade["entry"]
     sl = trade["stoploss"]
-    target = trade["target"]
     trade_type = trade["type"]
     entry_time = trade["time"]
 
     # Apply slippage
     if trade_type == "BUY":
         entry += SLIPPAGE_POINTS
-        target += SLIPPAGE_POINTS
     else:
         entry -= SLIPPAGE_POINTS
-        target -= SLIPPAGE_POINTS
 
     idx_list = df.index[df["datetime"] == entry_time].tolist()
     if not idx_list:
@@ -82,12 +86,50 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
         return 0
 
     current_sl = sl
-    best_move = 0
+    if USE_FIXED_TARGET_EXIT:
+        if trade_type == "BUY":
+            target = entry + EXIT_TARGET_R * sl_dist
+        else:
+            target = entry - EXIT_TARGET_R * sl_dist
 
+        for i in range(idx + 1, end_idx):
+            candle = df.iloc[i]
+
+            if trade_type == "BUY":
+                if candle["date"] != entry_date:
+                    return 1 if df.iloc[i - 1]["close"] > entry else 0
+                if candle["low"] <= current_sl:
+                    return 1 if current_sl > entry else 0
+                if candle["high"] >= target:
+                    return 1
+            else:
+                if candle["date"] != entry_date:
+                    return 1 if df.iloc[i - 1]["close"] < entry else 0
+                if candle["high"] >= current_sl:
+                    return 1 if current_sl < entry else 0
+                if candle["low"] <= target:
+                    return 1
+
+            if TRAIL_FIXED_TARGET_SL:
+                if trade_type == "BUY":
+                    favorable_r = (candle["high"] - entry) / sl_dist
+                    if favorable_r >= TRAIL_BREAKEVEN_R:
+                        current_sl = max(current_sl, entry + 2)
+                    if favorable_r >= TRAIL_LOCK_TRIGGER_R:
+                        current_sl = max(current_sl, entry + TRAIL_LOCK_PROFIT_R * sl_dist)
+                else:
+                    favorable_r = (entry - candle["low"]) / sl_dist
+                    if favorable_r >= TRAIL_BREAKEVEN_R:
+                        current_sl = min(current_sl, entry - 2)
+                    if favorable_r >= TRAIL_LOCK_TRIGGER_R:
+                        current_sl = min(current_sl, entry - TRAIL_LOCK_PROFIT_R * sl_dist)
+
+        return 0
+
+    best_move = 0
     for i in range(idx + 1, end_idx):
         candle = df.iloc[i]
 
-        # End of day
         if candle["date"] != entry_date:
             prev = df.iloc[i - 1]
             if trade_type == "BUY":
@@ -95,31 +137,21 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
             else:
                 return 1 if prev["close"] < entry else 0
 
-        # Calculate favorable move
         if trade_type == "BUY":
             move_r = (candle["high"] - entry) / sl_dist
         else:
             move_r = (entry - candle["low"]) / sl_dist
-
         best_move = max(best_move, move_r)
 
-        # Trail: breakeven at 0.8R, dynamic trail at 1.5R+
-        # NO fixed target — let trailing capture 1:2, 1:3, 1:4+
-        if best_move >= 0.8:
-            if trade_type == "BUY":
-                new_sl = entry + 2
-                current_sl = max(current_sl, new_sl)
-            else:
-                new_sl = entry - 2
-                current_sl = min(current_sl, new_sl)
+        if best_move >= TRAIL_BREAKEVEN_R:
+            current_sl = max(current_sl, entry + 2) if trade_type == "BUY" else min(current_sl, entry - 2)
 
         if best_move >= 1.5:
-            if trade_type == "BUY":
-                trail_sl = entry + (best_move - 0.5) * sl_dist
-                current_sl = max(current_sl, trail_sl)
-            else:
-                trail_sl = entry - (best_move - 0.5) * sl_dist
-                current_sl = min(current_sl, trail_sl)
+            current_sl = (
+                max(current_sl, entry + (best_move - 0.5) * sl_dist)
+                if trade_type == "BUY"
+                else min(current_sl, entry - (best_move - 0.5) * sl_dist)
+            )
 
         # Check SL (no fixed target check — trailing handles exits)
         if trade_type == "BUY":
@@ -140,6 +172,7 @@ def evaluate_trade(df: pd.DataFrame, trade: dict, max_candles: int = 60) -> int:
 strategies = [
     ORBStrategy(rr=2.0),
     EMAScalpStrategy(rr=2.0),
+    MomentumSurgeStrategy(rr=2.0),
     VWAPReversionStrategy(rr=2.0),
     PivotScalpStrategy(rr=2.0),
 ]
@@ -183,7 +216,7 @@ for strat in strategies:
     total = wins + losses
     wr = (wins / total * 100) if total > 0 else 0
     strategy_counts[trade["strategy"]] = {"total": total, "wins": wins, "wr": wr}
-    print(f"  Results (with trailing): {wins}W / {losses}L = {wr:.1f}% win rate")
+    print(f"  Results (live exit plan): {wins}W / {losses}L = {wr:.1f}% win rate")
 
 # =========================
 # SAVE CSV
@@ -192,7 +225,7 @@ df_out = pd.DataFrame(all_rows)
 df_out.to_csv(OUTPUT_PATH, index=False)
 
 print(f"\n{'='*50}")
-print(f"TRAINING DATA V3 SUMMARY (with trailing stops)")
+print(f"TRAINING DATA V3 SUMMARY (live exit plan)")
 print(f"{'='*50}")
 print(f"Total samples: {len(df_out)}")
 print(f"Win rate: {df_out['result'].mean()*100:.1f}%")

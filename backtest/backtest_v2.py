@@ -20,11 +20,13 @@ import numpy as np
 from strategy.indicators import calculate_all_indicators
 from strategy.orb_strategy import ORBStrategy
 from strategy.ema_scalp_strategy import EMAScalpStrategy
+from strategy.momentum_surge_strategy import MomentumSurgeStrategy
 from strategy.vwap_reversion_strategy import VWAPReversionStrategy
 from strategy.pivot_scalp_strategy import PivotScalpStrategy
 from ml.ai_filter_v2 import ai_filter_v2
 from brain.market_brain import detect_bias, detect_regime, detect_macro_bias
 from brain.strategy_brain import allow_trade
+from brain.trade_quality import passes_quality_gate
 from config import (
     DAILY_MAX_LOSS_R,
     EXIT_TARGET_R,
@@ -244,6 +246,7 @@ def evaluate_trade(df, trade, max_candles=60):
 strategies = [
     ORBStrategy(rr=2.0),
     EMAScalpStrategy(rr=2.0),
+    MomentumSurgeStrategy(rr=2.0),
     VWAPReversionStrategy(rr=2.0),
     PivotScalpStrategy(rr=2.0),
 ]
@@ -275,6 +278,7 @@ daily_pnl_r = {}
 daily_consecutive_losses = {}
 active_exit_indices = []
 blocked_by_brain = 0
+blocked_by_quality = 0
 blocked_by_position = 0
 blocked_by_daily_guard = 0
 
@@ -315,10 +319,19 @@ for trade in all_trades:
         blocked_by_brain += 1
         continue
 
+    trade["regime"] = market_regime
+    trade["market_bias"] = market_bias
+    trade["macro_bias"] = market_macro_bias
+
     # AI Filter
     ai_result = ai_filter_v2(trade)
 
     if ai_result["decision"] != "TAKE":
+        continue
+
+    quality_ok, _quality_reasons = passes_quality_gate(trade, ai_result)
+    if not quality_ok:
+        blocked_by_quality += 1
         continue
 
     # Evaluate trade WITH trailing stops
@@ -397,6 +410,7 @@ r4_plus = len(tw[tw["pnl_r"] >= 3.5])  # 1:4+ range
 
 print(f"\nTotal AI-filtered trades: {total_trades}")
 print(f"Brain-filtered raw signals: {blocked_by_brain}")
+print(f"Quality-filtered signals: {blocked_by_quality}")
 print(f"Skipped by active-trade cap ({MAX_ACTIVE_TRADES}): {blocked_by_position}")
 print(f"Skipped by daily guard: {blocked_by_daily_guard}")
 print(f"\n  Target Wins:               {target_wins:>4} trades  (+{df_results[df_results['result']=='TARGET_WIN']['pnl_r'].sum():.1f}R)")

@@ -1,20 +1,21 @@
 # =========================
-# V3 CONFIG - Pullback-entry strategies with 1:2 RR
+# V3 CONFIG - Pullback-entry strategies with fixed-target live exits
 # =========================
 
 # Strategy-specific AI thresholds.
 # The older 0.35 threshold produced many low-quality alerts. Backtests on the
-# stored BankNifty data needed a stricter floor than 0.35. These values target
-# roughly 3 trades/day while keeping the macro trend filter active.
+# stored BankNifty data needed a stricter floor than 0.35. These values favor
+# fewer, cleaner alerts while keeping the macro trend filter active.
 STRATEGY_THRESHOLDS = {
-    "ORB": 0.50,
-    "MOMENTUM_SURGE": 0.50,
-    "PIVOT_SCALP": 0.50,
-    "VWAP_REVERSION": 0.50,
-    "EMA_SCALP": 0.50,
+    "ORB": 0.65,
+    "MOMENTUM_SURGE": 0.70,
+    "PIVOT_SCALP": 0.65,
+    "VWAP_REVERSION": 0.70,
+    "EMA_SCALP": 0.65,
 }
 
-# Default risk-reward ratios per strategy (1:2 RR)
+# Candidate risk-reward ratios per strategy. Live exits are governed by
+# EXIT_TARGET_R below.
 STRATEGY_RR = {
     "ORB": 2.0,
     "EMA_SCALP": 2.0,
@@ -23,13 +24,14 @@ STRATEGY_RR = {
     "PIVOT_SCALP": 2.0,
 }
 
-# Max trades per day (across all strategies). Set above the 3/day target so
-# strong days are not cut off too early.
-MAX_TRADES_PER_DAY = 6
+# Max trades per day (across all strategies). The active-trade cap and AI floors
+# usually keep actual frequency much lower.
+MAX_TRADES_PER_DAY = 4
 
-# Controlled overlap for trade frequency. 1 is safest but too quiet; 3 gives
-# enough room for about 3 trades/day without fully unlimited stacking.
-MAX_ACTIVE_TRADES = 3
+# One active BankNifty position at a time. Multiple strategy names can describe
+# the same underlying bet, so stacking them doubles losses without adding real
+# diversification.
+MAX_ACTIVE_TRADES = 1
 ONE_ACTIVE_TRADE = MAX_ACTIVE_TRADES == 1
 
 # Exit plan. Backtests show the old always-trail exit gives away too many
@@ -44,8 +46,8 @@ TRAIL_LOCK_PROFIT_R = 0.3
 
 # Daily damage control. If the first few trades are wrong, stop for the day
 # instead of trying to win it back in chop.
-DAILY_MAX_LOSS_R = 3.0
-MAX_CONSECUTIVE_LOSSES = 3
+DAILY_MAX_LOSS_R = 2.0
+MAX_CONSECUTIVE_LOSSES = 2
 
 # Capital config
 CAPITAL = 10000
