@@ -26,6 +26,7 @@ from config import (
     MAX_DAILY_LOSS,
     MAX_CONSECUTIVE_LOSSES,
     MAX_TRADES_PER_DAY,
+    TIME_STOP_MINUTES,
     TRAIL_BREAKEVEN_R,
     TRAIL_FIXED_TARGET_SL,
     TRAIL_LOCK_PROFIT_R,
@@ -120,6 +121,7 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
         t4 = entry - sl_dist * 4
 
     now = _now_ist()
+    exit_by = (now + timedelta(minutes=TIME_STOP_MINUTES)).strftime('%I:%M %p')
 
     msg = (
         f"📌 <b>BANKNIFTY TRADE ALERT</b>\n\n"
@@ -130,11 +132,14 @@ def format_trade_alert_v2(trade: dict, ai_result: dict) -> str:
         f"<b>Exit Plan:</b>\n"
         f"  Target ({target_r:.1f}R) : {fixed_target:.1f}\n"
         f"  Reference 1R  : {t1:.1f}\n"
-        f"  Reference 2R  : {t2:.1f}\n\n"
+        f"  Reference 2R  : {t2:.1f}\n"
+        f"  ⏱ Time-stop   : exit by {exit_by} if not at target\n\n"
         f"<b>AI Prob</b>  : {ai_result['probability']}\n"
         f"<b>Time</b>     : {now.strftime('%I:%M %p')}\n\n"
         f"<i>Exit: target {target_r:.1f}R"
         f"{f', trail BE {TRAIL_BREAKEVEN_R:.1f}R, lock {TRAIL_LOCK_PROFIT_R:.1f}R at {TRAIL_LOCK_TRIGGER_R:.1f}R' if TRAIL_FIXED_TARGET_SL else ''}</i>\n"
+        f"<i>⚠️ You're buying an OPTION — theta bleeds premium while flat. "
+        f"If it stalls, cut it by the time-stop; don't wait for SL.</i>\n"
         f"<i>Regime: {trade.get('regime', 'N/A')} | Macro: {trade.get('macro_bias', 'N/A')}</i>"
     )
 

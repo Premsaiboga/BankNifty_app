@@ -49,6 +49,12 @@ TRAIL_LOCK_PROFIT_R = 0.3
 DAILY_MAX_LOSS_R = 2.0
 MAX_CONSECUTIVE_LOSSES = 2
 
+# Theta time-stop. You buy OPTIONS off these index alerts, and a flat option
+# bleeds premium every minute (theta). If the trade hasn't reached target within
+# this many minutes, exit — you're paying decay to hold a bet that isn't working.
+# This is the #1 defensible risk control for an option buyer; see option_backtest.py.
+TIME_STOP_MINUTES = 30
+
 # Capital config
 CAPITAL = 10000
 LOT_SIZE = 15
